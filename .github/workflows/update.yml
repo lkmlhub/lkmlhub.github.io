@@ -1,0 +1,113 @@
+name: update
+
+# Crawl lore.kernel.org politely, accumulate history on the `data` branch, build the static
+# site and deploy it to GitHub Pages. Never run overlapping updates.
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      budget_minutes:
+        description: "Crawl time budget in minutes"
+        default: "25"
+      deep_budget:
+        description: "Max search-atom requests per run to fill gaps on busy lists (empty uses the repository variable LOREHUB_DEEP_BUDGET, default 0 = off)"
+        default: ""
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: lorehub-update
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v7
+
+      - name: Look for the data branch
+        id: probe
+        run: |
+          if git ls-remote --exit-code --heads origin data > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "ref=data" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the data branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.probe.outputs.ref }}
+          path: data-branch
+
+      - name: Start an empty data branch (first run only)
+        if: steps.probe.outputs.exists == 'false'
+        working-directory: data-branch
+        run: |
+          git checkout --orphan data
+          git rm -rf -q .
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+
+      - name: Tests
+        run: python3 -m unittest
+
+      - name: Crawl and build
+        env:
+          BUDGET: ${{ github.event.inputs.budget_minutes || '25' }}
+          DEEP: ${{ github.event.inputs.deep_budget || vars.LOREHUB_DEEP_BUDGET || '0' }}
+        run: |
+          REPO="${GITHUB_REPOSITORY#*/}"
+          if [[ "$REPO" == *.github.io ]]; then BASE="/"; else BASE="/$REPO/"; fi
+          python3 -m lorehub all \
+            --state data-branch/state \
+            --out public \
+            --base "$BASE" \
+            --budget-min "$BUDGET" \
+            --deep-budget "$DEEP" --deep-pages 2 | tee crawl.log
+          {
+            echo "### LoreHub update"
+            echo '```'
+            tail -n 5 crawl.log
+            echo '```'
+            echo "Site size: $(du -sh public | cut -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Push the data branch as a single commit
+        working-directory: data-branch
+        run: |
+          git config user.name "lorehub-bot"
+          git config user.email "lorehub-bot@users.noreply.github.com"
+          git checkout --orphan data-squashed
+          git add -A
+          git commit -q -m "Update data $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push --force origin data-squashed:data
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
