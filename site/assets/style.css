@@ -324,7 +324,7 @@ details.quote summary { cursor: pointer; color: var(--fg-muted); font-size: 12px
 .diff-toggle:hover { background: var(--bg-inset); }
 .diff-toggle .icon { transition: transform .1s; }
 .diff-toggle[aria-expanded="false"] .icon { transform: rotate(-90deg); }
-.diff-name { flex: 1 1 200px; min-width: 0; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.diff-name { flex: 0 1 auto; min-width: 0; max-width: 100%; font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; }
 .diff-name a { color: var(--fg); }
 .diff-counts { font: 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
 .diff-bars { display: inline-flex; gap: 1px; }

@@ -32,5 +32,6 @@
 - public-inbox: `dt:` needs 14 digits, the lower bound is exclusive and the upper inclusive, `OR` needs parentheses,
   an empty search answers 404.
 - 90 days for all lists is about 3 300 search requests with a 25 page cap per list (9 600 without a cap).
-- A series was missing because its cover letter had a different title than patch 1: versions link on the cover
-  letter title ("IPE: add a dedicated policy keyring"), which is also what the PR is called.
+- In the real acceptance series the cover letter ("IPE: add a dedicated policy keyring") is titled differently from
+  patch 1 ("ipe: add the .ipe policy keyring"): versions link on the cover letter title, the pull request is named
+  after it, and the search index also holds the patch subjects so both names find it.
