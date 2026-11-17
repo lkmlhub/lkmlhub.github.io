@@ -5,14 +5,15 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lorehub.build import build_site, DIFF_BUDGET
+from lorehub.build import MAX_SITE_MB, build_site
 from lorehub.crawl import ingest
 from lorehub.diff import extract_diff
 from lorehub.diffshards import cap_series, est_size, pick
 from lorehub.feed import to_record
-from lorehub.state import MAX_DIFF_MSGS, State, apply_diffs, day_of, merge_records
+from lorehub.retention import Limits, finalize_list
+from lorehub.state import MAX_DIFF_MSGS, State, day_of, merge_records, stash_diffs
 
-from .helpers import NOW, make_state, raw
+from .helpers import NOW, diff_shard, jload, make_state, raw, thread_detail
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 quiet = lambda m: None  # noqa: E731
@@ -30,7 +31,7 @@ def entries(n, base=NOW - 5 * DAY, step=3600):
     return [raw("p%d" % i, "[PATCH] change %d" % i, t=base + i * step, body=patch_body(extra=str(i))) for i in range(n)]
 
 
-class ApplyDiffsTests(unittest.TestCase):
+class StoreDiffsTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.state = State(self.tmp.name)
@@ -46,8 +47,8 @@ class ApplyDiffsTests(unittest.TestCase):
             data = self.state.load_list("l")
         records = {e["mid"]: to_record(e, True, diffs) for e in raws}
         merge_records(data, records, NOW)
-        apply_diffs(self.state, "l", data, diffs, **({"keep": keep} if keep else {}))
-        self.state.save_list("l", data)
+        stash_diffs(data, diffs)
+        finalize_list(self.state, "l", data, NOW, Limits(max_diff_msgs=keep or MAX_DIFF_MSGS))
         return data
 
     def test_dz_marks_stored_diffs_and_files_are_per_list_and_day(self):
@@ -68,9 +69,8 @@ class ApplyDiffsTests(unittest.TestCase):
         for day in self.state.diff_days("l"):
             stored.update(self.state.load_diff_day("l", day))
         self.assertEqual(sorted(stored), with_dz)
-        # all ten records and their ds stats remain
-        self.assertEqual(len(data["msgs"]), 10)
-        self.assertTrue(all("ds" in r for r in data["msgs"].values()))
+        # a series is kept whole or dropped whole: the six older series are gone with their messages
+        self.assertEqual(sorted(data["msgs"]), ["p6", "p7", "p8", "p9"])
 
     def test_new_batch_evicts_older_diffs_and_deletes_empty_day_files(self):
         self.ingest(entries(4, base=NOW - 60 * DAY, step=DAY), keep=4)
@@ -89,8 +89,8 @@ class ApplyDiffsTests(unittest.TestCase):
         self.assertEqual({p: p.read_bytes() for p in self.state.root.rglob("*.gz")}, files)
         self.assertEqual({p: p.stat().st_mtime_ns for p in files}, mt)
 
-    def test_default_keep_is_bounded(self):
-        self.assertGreaterEqual(MAX_DIFF_MSGS, 100)
+    def test_default_keep_is_1000(self):
+        self.assertEqual(MAX_DIFF_MSGS, 1000)
 
     def test_replies_and_cover_letters_store_no_diffs(self):
         ents = [raw("c", "[PATCH 0/1] cover", body="cover\n"),
@@ -98,13 +98,14 @@ class ApplyDiffsTests(unittest.TestCase):
         data = self.ingest(ents)
         self.assertFalse(any("dz" in r for r in data["msgs"].values()))
         self.assertEqual(self.state.diff_days("l"), [])
+        self.assertEqual(sorted(data["msgs"]), ["c", "r"])  # no patch with a diff yet: nothing is dropped
 
     def test_ingest_helper_roundtrip(self):
         st, tmp = make_state({})
         try:
             from lorehub.feed import parse_feed  # noqa: F401
             added, data = ingest(st, "l", [dict(e, mid=e["mid"]) for e in entries(3)], NOW)
-            st.save_list("l", data)
+            finalize_list(st, "l", data, NOW)
             self.assertEqual(added, 3)
             self.assertEqual(len(st.diff_days("l")) >= 1, True)
         finally:
@@ -183,12 +184,12 @@ class BuildDiffTests(unittest.TestCase):
 
     def test_diff_shard_and_thread_summary(self):
         st, out, report = self.build(self.series())
-        shards = list((out / "data/diffs/lkml").glob("*.json"))
+        shards = list((out / "data/diffs/lkml").glob("*.json.gz"))
         self.assertEqual(len(shards), 1)
-        diff = json.loads(shards[0].read_text())["p"]
+        diff = jload(shards[0])["p"]
         self.assertEqual(sorted(diff), ["s1", "s2"])
         self.assertEqual(diff["s1"]["f"][0]["p"], "a.c")
-        detail = json.loads((out / "data/threads/lkml/0.json").read_text())["1"]
+        detail = thread_detail(out, "lkml", 1)
         self.assertEqual((detail["fc"], detail["fa"], detail["fd"], detail["df"]), (2, 2, 0, 1))
         self.assertEqual(detail["patches"][0]["ds"], [1, 1, 0])
         self.assertEqual(report["diff_series"], 1)
@@ -201,13 +202,13 @@ class BuildDiffTests(unittest.TestCase):
             self.assertNotIn("new line", t, p)
             self.assertNotIn("@@ -1,2", t, p)
 
-    def test_zero_budget_publishes_no_diffs_but_keeps_counts(self):
+    def test_a_series_that_does_not_fit_is_not_shown_at_all(self):
         st, out, report = self.build(self.series(), diff_budget=0)
         self.assertFalse((out / "data/diffs").exists())
-        detail = json.loads((out / "data/threads/lkml/0.json").read_text())["1"]
-        self.assertEqual(detail["fc"], 2)
-        self.assertNotIn("df", detail)
+        self.assertFalse((out / "data/threads").exists())
+        self.assertFalse(list((out / "data/lists/lkml").glob("pr-*.json")))
         self.assertEqual(report["diff_evicted"], 1)
+        self.assertEqual(report["threads"], 0)
 
     def test_site_cap_lowers_the_diff_budget(self):
         ents = []
@@ -216,19 +217,22 @@ class BuildDiffTests(unittest.TestCase):
                     + "".join("+%s line %d\n" % ("z" * 70, i) for i in range(400)))
             ents.append(raw("x%d" % s, "[PATCH] big %d" % s, name="A%d" % s, t=NOW - 100 * s, body=body))
         st, out, report = self.build(ents, diff_budget=10**9)
+        out = out
         full = report["diff_bytes"]
-        self.assertGreater(full, 150000)
-        st2, out2, report2 = self.build(ents, diff_budget=full // 2)
+        self.assertGreater(full, 6000)
+        st2, out2, report2 = self.build(ents, diff_budget=report['est_heavy'] // 2)
         self.assertLess(report2["diff_bytes"], full)
         self.assertGreater(report2["diff_series"], 0)
         self.assertEqual(report2["diff_series"] + report2["diff_evicted"], 6)
+        rows = [r for p in (out2 / "data/lists/lkml").glob("pr-*.json") for r in jload(p)["rows"]]
+        self.assertEqual(len(rows), report2["diff_series"])  # whole series only: every shown row has its shard
 
     def test_privacy_diff_emails_are_gone_everywhere(self):
         body = patch_body("MAINTAINERS", "x") + ""
         body = body.replace("+new line x", "+M:\tNew Person <new.person@corp.example.org>\n+R: plain@example.test")
         body = body.replace("@@ -1,2 +1,3 @@", "@@ -1,2 +1,4 @@")
         st, out, _ = self.build([raw("m1", "[PATCH] maintainers", body=body)])
-        files = list(out.rglob("*.json")) + list(st.root.rglob("*.gz"))
+        files = list(out.rglob("*.json")) + list(out.rglob("*.gz")) + list(st.root.rglob("*.gz"))
         found = False
         for p in files:
             t = gzip.decompress(p.read_bytes()).decode() if p.suffix == ".gz" else p.read_text()
@@ -236,8 +240,8 @@ class BuildDiffTests(unittest.TestCase):
             found = found or "[email]" in t
         self.assertTrue(found)
 
-    def test_default_budget_is_60mb(self):
-        self.assertEqual(DIFF_BUDGET, 60_000_000)
+    def test_default_site_cap_is_700_mb(self):
+        self.assertEqual(MAX_SITE_MB, 700)
 
     def test_extract_matches_state_roundtrip(self):
         d = extract_diff(patch_body("q.c", "1"))

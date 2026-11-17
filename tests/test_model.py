@@ -84,9 +84,12 @@ class ThreadingTests(unittest.TestCase):
         ents, _ = load({"lkml": v1 + v2})
         self.assertEqual(sorted(e.version for e in ents if e.kind == "pr"), [1, 2])
 
-    def test_git_pull_is_a_pr(self):
-        ents, _ = load({"lkml": [raw("g", "[GIT PULL] driver updates for v6.13", "Greg KH")]})
-        self.assertEqual((ents[0].kind, ents[0].pull), ("pr", True))
+    def test_git_pull_has_no_diff_so_it_is_a_discussion_that_can_be_merged(self):
+        ents, _ = load({"lkml": [raw("g", "[GIT PULL] driver updates for v6.13", "Greg KH"),
+                                 raw("g2", "Re: [GIT PULL] driver updates for v6.13", "Linus", parent="g", t=NOW - 100,
+                                     body="Pulled, thanks.\n")]})
+        self.assertEqual((ents[0].kind, ents[0].pull), ("issue", True))
+        self.assertEqual(ents[0].label, "merged")
 
 
 class VersionTests(unittest.TestCase):

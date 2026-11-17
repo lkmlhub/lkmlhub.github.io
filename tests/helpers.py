@@ -1,5 +1,7 @@
 """Shared helpers for building synthetic state quickly."""
 
+import gzip
+import json
 import tempfile
 from pathlib import Path
 
@@ -46,7 +48,7 @@ def make_state(lists, now=NOW):
     st = State(tmp.name)
     for name, entries in lists.items():
         _, data = ingest(st, name, entries, now, data={"v": 1, "name": name, "msgs": {}})
-        st.save_list(name, data)
+        st.save_list(name, data)  # no retention: tests choose their own messages
     return st, tmp
 
 
@@ -69,4 +71,34 @@ def load(lists, now=NOW):
     return ents, msgs
 
 
-__all__ = ["raw", "make_state", "load", "NOW", "FIXTURES", "mid_from_href"]
+def jload(path):
+    """Read a JSON file of the built site, plain or gzip compressed (diffs and bodies are .json.gz)."""
+    path = Path(path)
+    raw_bytes = path.read_bytes()
+    if raw_bytes[:2] == b"\x1f\x8b":
+        raw_bytes = gzip.decompress(raw_bytes)
+    return json.loads(raw_bytes.decode("utf-8"))
+
+
+def site_texts(out):
+    """Every text file of a built site as (path, decoded text), gzip files decoded."""
+    for p in sorted(Path(out).rglob("*")):
+        if p.is_file() and p.suffix in (".json", ".gz", ".html", ".js", ".css"):
+            b = p.read_bytes()
+            yield p, (gzip.decompress(b) if b[:2] == b"\x1f\x8b" else b).decode("utf-8", "replace")
+
+
+def thread_detail(out, home, n):
+    return jload(Path(out) / ("data/threads/%s/%d.json" % (home, n // 32)))[str(n)]
+
+
+def thread_bodies(out, home, n):
+    return jload(Path(out) / ("data/bodies/%s/%d.json.gz" % (home, n)))["b"]
+
+
+def diff_shard(out, home, n):
+    return jload(Path(out) / ("data/diffs/%s/%d.json.gz" % (home, n)))["p"]
+
+
+__all__ = ["raw", "make_state", "load", "NOW", "FIXTURES", "mid_from_href", "jload", "site_texts", "thread_detail",
+           "thread_bodies", "diff_shard"]

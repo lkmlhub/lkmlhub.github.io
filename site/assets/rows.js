@@ -19,7 +19,7 @@
     if (row.pu) tags.push(h('span', { class: 'chip' }, 'pull request'));
     (row.tg || []).forEach(function (t) { tags.push(h('span', { class: 'chip chip-tag' }, t)); });
     (row.x || []).forEach(function (l) { tags.push(LH.chip(l, LH.route(l), 'Also posted to ' + l)); });
-    if (row.pa) tags.push(h('span', { class: 'chip chip-partial', title: 'Some earlier messages are outside the 120 day window' }, 'partial'));
+    if (row.pa) tags.push(h('span', { class: 'chip chip-partial', title: 'Some earlier messages are outside the history window' }, 'partial'));
 
     var parts = ['#' + row.n + (row.hl && !opts.listChip ? ' in ' + row.hl : '')];
     var opened = row.a ? ['opened ', LH.timeEl(row.o), ' by ', h('a', { href: LH.authorHref(row.ah) }, row.a)]
@@ -46,26 +46,49 @@
       h('div', { class: 'row-side' }, row.rv ? revs : null, comments));
   };
 
-  /* Mail body: quoted blocks are collapsed, links are safe http(s) anchors, everything is text. */
+  /* Mail body: links are safe http(s) anchors, everything is text. Quoted blocks of more than QUOTE_OPEN lines are
+   * collapsed behind a "Show quoted text" toggle, a message of more than CLIP_LINES lines is clipped until
+   * "Show full message" is pressed (which also opens every quote). */
+  var QUOTE_OPEN = 5, CLIP_LINES = 45;
   LH.renderBody = function (text) {
     var box = h('div', { class: 'mail' });
     var lines = String(text || '').split('\n');
-    var i = 0;
+    var i = 0, quotes = [], visible = 0;
     while (i < lines.length) {
       var quoted = /^\s*>/.test(lines[i]);
       var j = i;
       while (j < lines.length && /^\s*>/.test(lines[j]) === quoted) j++;
       var chunk = lines.slice(i, j).join('\n');
-      if (quoted) {
-        box.appendChild(h('details', { class: 'quote' },
-          h('summary', null, 'Quoted text (' + LH.plural(j - i, 'line') + ')'),
-          h('pre', { class: 'mail-pre quoted' }, chunk)));
+      if (quoted && j - i > QUOTE_OPEN) {
+        var det = h('details', { class: 'quote' },
+          h('summary', null, 'Show quoted text (' + LH.plural(j - i, 'line') + ')'),
+          h('pre', { class: 'mail-pre quoted' }, chunk));
+        quotes.push(det);
+        box.appendChild(det);
+        visible += 1;
+      } else if (quoted) {
+        box.appendChild(h('pre', { class: 'mail-pre quoted' }, chunk));
+        visible += j - i;
       } else if (chunk.trim()) {
         box.appendChild(h('pre', { class: 'mail-pre' }, LH.linkify(chunk.replace(/^\n+|\n+$/g, ''))));
+        visible += j - i;
       }
       i = j;
     }
-    return box;
+    if (visible <= CLIP_LINES && !quotes.length) return box;
+    var clipped = visible > CLIP_LINES;
+    var wrap = h('div', { class: clipped ? 'mail-clipped' : null }, box);
+    var full = false;
+    var more = clipped ? 'Show full message' : 'Show all quoted text';
+    var btn = h('button', { type: 'button', class: 'btn btn-small show-full', 'aria-expanded': 'false' }, more);
+    btn.addEventListener('click', function () {
+      full = !full;
+      wrap.classList.toggle('mail-clipped', !full && clipped);
+      quotes.forEach(function (q) { q.open = full; });
+      btn.textContent = full ? 'Show less' : more;
+      btn.setAttribute('aria-expanded', full ? 'true' : 'false');
+    });
+    return h('div', { class: 'mail-outer' }, wrap, h('div', { class: 'mail-actions' }, btn));
   };
 
   /* Pager over an array of rows that were already filtered. */

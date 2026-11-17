@@ -8,7 +8,8 @@ from pathlib import Path
 from lorehub.crawl import CacheSource, crawl
 from lorehub.feed import to_record
 from lorehub.fetch import FetchError, Fetcher, Response, parse_retry_after
-from lorehub.state import State, StateError, atomic_write, gzip_bytes, merge_records, prune
+from lorehub.retention import Limits, enforce
+from lorehub.state import State, StateError, atomic_write, gzip_bytes, merge_records
 
 from .helpers import FIXTURES, NOW, raw
 
@@ -131,18 +132,28 @@ class StateTests(unittest.TestCase):
     def test_gzip_is_deterministic(self):
         self.assertEqual(gzip_bytes(b"abc" * 100), gzip_bytes(b"abc" * 100))
 
-    def test_merge_and_prune(self):
+    def test_merge_adds_new_records_and_applies_the_age_limit(self):
         data = {"msgs": {}}
-        old = to_record(raw("old", "x", t=NOW - 130 * 86400))
+        old = to_record(raw("old", "x", t=NOW - 200 * 86400))
         mid_age = to_record(raw("mid", "y", t=NOW - 70 * 86400, body="body text\n"))
         new = to_record(raw("new", "z", t=NOW - 10, body="fresh\n"))
         added = merge_records(data, {"old": old, "mid": mid_age, "new": new}, NOW)
         self.assertEqual(added, 2)
-        self.assertNotIn("old", data["msgs"])
-        self.assertNotIn("b", data["msgs"]["mid"])  # older than 60 days: body dropped
-        self.assertIn("b", data["msgs"]["new"])
-        self.assertEqual(data["last_seen"], NOW - 10)
+        self.assertNotIn("old", data["msgs"])  # older than the 180 day retention
         self.assertEqual(merge_records(data, {"new": new}, NOW), 0)
+        self.assertEqual(merge_records(data, {"old": old}, NOW, retention_days=None), 1)  # thread completion takes any age
+
+    def test_a_record_fetched_again_replaces_the_old_trimmed_one(self):
+        data = {"msgs": {"a": {"t": NOW - 5, "a": "A", "h": "x", "p": "", "s": "s", "b": "short\n> [...]", "tr": [["acked", "n", "h"]]}}}
+        full = to_record(raw("a", "s", t=NOW - 5, body="complete text\n> quoted 1\n> quoted 2\n"))
+        merge_records(data, {"a": full}, NOW)
+        rec = data["msgs"]["a"]
+        self.assertIn("quoted 2", rec["b"])
+        self.assertEqual(rec["bv"], 3)
+        self.assertNotIn("tr", rec)  # derived data is recomputed from the complete message
+        nobody = to_record(raw("a", "s", t=NOW - 5, body="x\n"), keep_body=False)
+        merge_records(data, {"a": nobody}, NOW)
+        self.assertIn("quoted 2", data["msgs"]["a"]["b"])  # a fetch without bodies keeps the stored body
 
     def test_day_segments_only_rewrite_what_changed(self):
         with tempfile.TemporaryDirectory() as d:
@@ -165,14 +176,20 @@ class StateTests(unittest.TestCase):
             self.assertEqual(changed, [files[-1]])
             self.assertEqual(st.list_names(), ["lkml"])
 
-    def test_prune_caps(self):
+    def test_discussion_caps_count_age_and_bodies(self):
         data = {"msgs": {}}
-        recs = {"m%d" % i: to_record(raw("m%d" % i, "s", t=NOW - i * 60, body="b\n")) for i in range(50)}
+        recs = {"m%d" % i: to_record(raw("m%d" % i, "s %d" % i, t=NOW - i * 60, body="b\n")) for i in range(50)}
+        recs["ancient"] = to_record(raw("ancient", "old", t=NOW - 90 * 86400, body="body\n"))
         merge_records(data, recs, NOW)
-        prune(data, NOW, max_msgs=20, max_body_msgs=5)
+        enforce(data, "l", NOW, Limits(max_msgs=20, max_body_msgs=5))
         self.assertEqual(len(data["msgs"]), 20)
         self.assertEqual(sum(1 for r in data["msgs"].values() if "b" in r), 5)
         self.assertIn("m0", data["msgs"])
+        data = {"msgs": {}}
+        merge_records(data, {"ancient": recs["ancient"], "m0": recs["m0"]}, NOW)
+        enforce(data, "l", NOW)
+        self.assertNotIn("b", data["msgs"]["ancient"])  # discussion bodies are kept for 60 days
+        self.assertIn("b", data["msgs"]["m0"])
 
     def test_corrupt_state_is_an_error_not_an_empty_state(self):
         with tempfile.TemporaryDirectory() as d:

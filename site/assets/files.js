@@ -154,19 +154,37 @@
       return Promise.resolve(wrap);
     }
     var statNote = d.fc ? LH.plural(d.fc, 'file') + ' changed, +' + d.fa + ' -' + d.fd + ' according to the patches. ' : '';
-    var pending = d.df ? LH.getJSON('data/diffs/' + encodeURIComponent(list) + '/' + n + '.json').then(function (x) { return x.p; }) :
+    var pending = d.df ? LH.getGz('data/diffs/' + encodeURIComponent(list) + '/' + n + '.json.gz').then(function (x) { return x.p; }) :
       Promise.resolve(null);
     return pending.then(function (diffs) {
       if (!diffs) {
-        wrap.appendChild(h('div', { class: 'card empty' }, h('h3', null, 'The diff of this series is not stored'),
-          h('p', { class: 'muted' }, statNote + 'LoreHub keeps diffs for the newest patches of each list within a size budget, and this one is older or over the budget.'),
+        /* defensive only: the build shows a series only when its diff is stored, so this is not reachable in a normal build */
+        wrap.appendChild(h('div', { class: 'card empty', 'data-empty': 'no-diff' }, h('h3', null, 'The diff of this series is not available'),
+          h('p', { class: 'muted' }, statNote + 'The diff file could not be loaded.'),
           h('p', null, ctx.loreLink(patches[0], 'View the patches on lore'))));
         return wrap;
       }
       build(wrap, ctx, patches, diffs, statNote);
       return wrap;
+    }, function (err) {
+      wrap.appendChild(LH.errorBox(err, 'the diff of this series'));
+      return wrap;
     });
   };
+
+  /* "diffs for patches 4-7 are not stored": ranges of the patch numbers that have no diff in the series. */
+  function ranges(nums) {
+    var out = [], i = 0;
+    nums.sort(function (a, b) { return a - b; });
+    while (i < nums.length) {
+      var j = i;
+      while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+      out.push(j > i ? nums[i] + '-' + nums[j] : String(nums[i]));
+      i = j + 1;
+    }
+    return out.join(', ');
+  }
+  LH.filesTab.ranges = ranges;
 
   function build(wrap, ctx, patches, diffs, statNote) {
     var d = ctx.d, list = ctx.list, n = ctx.n, query = ctx.query;
@@ -191,7 +209,7 @@
     select.appendChild(h('option', { value: 'all' }, 'All patches combined'));
     patches.forEach(function (p) {
       var pd = diffs[p.mid];
-      var o = h('option', { value: String(p.i) }, p.i + '/' + total + ' ' + p.t + (pd ? ' (' + LH.plural(pd.f.length, 'file') + ')' : ' (no diff)'));
+      var o = h('option', { value: String(p.i) }, p.i + '/' + total + ' ' + p.t + (pd ? ' (' + LH.plural(pd.f.length, 'file') + ')' : ' (no diff stored)'));
       select.appendChild(o);
     });
     select.value = only === null ? 'all' : String(only);
@@ -310,11 +328,16 @@
 
     function warnings() {
       LH.clear(banners);
+      var missing = patches.filter(function (p) { return !diffs[p.mid]; }).map(function (p) { return p.i; });
+      if (missing.length) {
+        banners.appendChild(h('div', { class: 'banner', 'data-notice': 'partial-diffs' }, 'Diffs for ' + (missing.length === 1 ? 'patch ' : 'patches ') +
+          ranges(missing) + ' ' + (missing.length === 1 ? 'is' : 'are') + ' not stored, ', ctx.loreLink(patches[0], 'see lore'), '.'));
+      }
       var shown = only === null ? patches : patches.filter(function (p) { return p.i === only; });
       shown.forEach(function (p) {
         var pd = diffs[p.mid];
         if (!pd) {
-          banners.appendChild(h('div', { class: 'banner' }, 'Patch ' + p.i + '/' + total + ' has no stored diff (not kept, or its message was not seen). ', ctx.loreLink(p, 'View full patch on lore'), '.'));
+          if (only !== null) banners.appendChild(h('div', { class: 'banner' }, 'Patch ' + p.i + '/' + total + ' has no stored diff (not kept, or its message was not seen). ', ctx.loreLink(p, 'View full patch on lore'), '.'));
         } else if (pd.tr) {
           banners.appendChild(h('div', { class: 'banner banner-warn' }, 'The diff of patch ' + p.i + '/' + total + ' was truncated: it is ' + kb(pd.sz) +
             ' and LoreHub keeps at most 120 KB per patch and 600 KB per series. ', ctx.loreLink(p, 'View full patch on lore'), '.'));

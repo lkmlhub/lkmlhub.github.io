@@ -96,9 +96,11 @@
       if (t.pending) notes.push(t.pending + ' lists have not been crawled yet and fill in over the next runs.');
       var bfi = data.backfill;
       if (bfi && bfi.days && bfi.done < bfi.lists) {
-        notes.push('History backfill: ' + bfi.done + ' of ' + bfi.lists + ' lists reach back ' + bfi.days + ' days (to ' + LH.shortDate(bfi.horizon) +
-          '), the rest fill in over the next runs. Busy lists stop at a page cap.');
+        notes.push((bfi.rebuild ? 'History is being rebuilt with complete conversations and diffs, so series appear again as their list is walked. ' : '') +
+          'History backfill: ' + bfi.done + ' of ' + bfi.lists + ' lists reach back ' + bfi.days + ' days (to ' + LH.shortDate(bfi.horizon) +
+          '), the rest fill in over the next runs.');
       }
+      if (bfi && bfi.waiting) notes.push(bfi.waiting + ' series wait for the rest of their conversation to be fetched from lore.');
       if (t.stale) notes.push(t.stale + ' lists could not be refreshed recently and may be out of date.');
 
       LH.clear(app).appendChild(h('div', { class: 'home' },

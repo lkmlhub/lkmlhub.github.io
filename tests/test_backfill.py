@@ -57,6 +57,28 @@ class FakeSource:
                 self.active -= 1
 
 
+class SyncPool:
+    """Runs each task when it is submitted, so the order of requests is deterministic."""
+
+    def __init__(self, max_workers=2):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def submit(self, fn, *args):
+        from concurrent.futures import Future
+        f = Future()
+        try:
+            f.set_result(fn(*args))
+        except BaseException as e:  # noqa: BLE001
+            f.set_exception(e)
+        return f
+
+
 class Clock:
     def __init__(self):
         self.t = 1000.0
@@ -70,9 +92,13 @@ class Clock:
             self.t += dt
 
 
+def diff_body(i):
+    return ("Change %d.\n---\n a | 1 +\n\ndiff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1,2 @@\n x\n+y%d\n" % (i, i))
+
+
 def entries(prefix, n, newest=NOW - 3600, step=DAY // 2, same=False):
     return [raw("%s%d" % (prefix, i), "[PATCH] change %s %d" % (prefix, i), name="Dev %s" % prefix,
-                t=newest - (0 if same else i * step)) for i in range(n)]
+                t=newest - (0 if same else i * step), body=diff_body(i)) for i in range(n)]
 
 
 class QueryTests(unittest.TestCase):
@@ -184,13 +210,16 @@ class BackfillTests(unittest.TestCase):
     def test_small_lists_first_and_at_most_two_in_flight(self):
         self.state.save_meta({"lists": {"big": {"rt": 900.0}, "mid": {"rt": 30.0}, "tiny": {"rt": 0.5}, "unknown": {}}})
         src = FakeSource({n: entries(n[0], 12) for n in ("big", "mid", "tiny", "unknown")})
-        self.run_bf(src, names=["big", "mid", "tiny", "unknown"])
+        with mock.patch.object(bf, "ThreadPoolExecutor", SyncPool):
+            self.run_bf(src, names=["big", "mid", "tiny", "unknown"])
         first = []
         for c in src.calls:
             if c[0] not in first:
                 first.append(c[0])
         self.assertEqual(first, ["unknown", "tiny", "mid", "big"])  # no stored messages and no rate: the cheapest list
-        self.assertLessEqual(src.max_active, 2)
+        src2 = FakeSource({n: entries(n[0], 12) for n in ("big", "mid", "tiny", "unknown")})
+        self.run_bf(src2, Config(days=39), names=["big", "mid", "tiny", "unknown"])  # real pool: never more than 2 in flight
+        self.assertLessEqual(src2.max_active, 2)
         self.assertEqual(order(["b", "a", "c"], {"b": {"rt": 5}, "c": {"rt": 1}}), ["c", "b", "a"])
 
     def test_old_state_without_rates_is_ordered_from_the_stored_messages(self):
@@ -201,13 +230,16 @@ class BackfillTests(unittest.TestCase):
                 self.state.save_list(name, data)
         self.state.save_meta({"lists": {"busy": {}, "calm": {}, "empty": {}}})
         src = FakeSource({"busy": entries("b", 3), "calm": entries("c", 3), "empty": []})
-        self.run_bf(src, names=["busy", "calm", "empty"])
+        with mock.patch.object(bf, "ThreadPoolExecutor", SyncPool):
+            self.run_bf(src, names=["busy", "calm", "empty"])
         first = []
         for c in src.calls:
             if c[0] not in first:
                 first.append(c[0])
         self.assertEqual(first, ["empty", "calm", "busy"])
-        self.assertIn("rt", self.state.load_meta()["lists"]["busy"])
+        rt = {n: self.state.load_meta()["lists"][n]["rt"] for n in ("busy", "calm", "empty")}
+        self.assertEqual(sorted(rt, key=rt.get), ["empty", "calm", "busy"])  # the rate is derived from stored messages
+        self.assertEqual(order(["busy", "calm", "empty"], {n: {"rt": v} for n, v in rt.items()}), ["empty", "calm", "busy"])
 
     def test_failure_is_recorded_and_other_lists_continue(self):
         self.run_bf(FakeSource({"ok": entries("o", 4), "bad": entries("b", 4)}), names=["ok"])
@@ -257,8 +289,22 @@ class BackfillTests(unittest.TestCase):
         self.assertEqual(src.calls[first][2], NOW - 5 * DAY)  # started at the old horizon, not at now
         self.assertEqual(self.mids("a"), {e["mid"] for e in ents if e["ts"] > NOW - 10 * DAY})
 
-    def test_horizon_is_clamped_to_the_retention_window(self):
-        self.assertEqual(bf.horizon_ts(NOW, 1000), NOW - 120 * DAY)
+    def test_default_horizon_is_180_days_and_retention_follows_it(self):
+        from lorehub.retention import effective_retention
+        from lorehub.state import RETENTION_DAYS
+        self.assertEqual(Config().days, 180)
+        self.assertEqual(RETENTION_DAYS, 180)
+        self.assertEqual(bf.horizon_ts(NOW, 365), NOW - 365 * DAY)
+        self.assertEqual(effective_retention(365), 365)
+        self.assertEqual(effective_retention(30), 180)
+        self.assertEqual(effective_retention(0), 180)
+
+    def test_a_horizon_beyond_the_default_keeps_the_backfilled_messages(self):
+        ents = [raw("old%d" % i, "[PATCH] old %d" % i, t=NOW - (200 + i) * DAY, body=diff_body(i)) for i in range(3)]
+        self.run_bf(FakeSource({"a": ents}), Config(days=300), names=["a"])
+        self.assertEqual(self.mids("a"), {"old0", "old1", "old2"})
+        self.run_bf(FakeSource({"b": ents}), Config(days=100), names=["b"])  # inside the default retention only
+        self.assertEqual(self.mids("b"), set())
 
     def test_progress_helper(self):
         self.run_bf(FakeSource({"a": entries("a", 3)}), names=["a"])
@@ -308,7 +354,7 @@ class BackfilledHistoryTests(unittest.TestCase):
         self.assertEqual(len(detail["vs"]), 2)
         self.assertEqual(detail["df"], 1)
         self.assertEqual(detail["fc"], 1)
-        self.assertTrue((out / ("data/diffs/lsm/%d.json" % newest["n"])).is_file())
+        self.assertTrue((out / ("data/diffs/lsm/%d.json.gz" % newest["n"])).is_file())
 
 
 if __name__ == "__main__":

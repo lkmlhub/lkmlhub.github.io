@@ -107,7 +107,7 @@ class SmokeTests(unittest.TestCase):
                 total += len(rows)
         counts = meta["counts"]
         self.assertEqual(total, sum(sum(v.values()) for v in counts.values()))
-        self.assertGreater(total, 5)
+        self.assertGreater(total, 2)
 
     def test_every_row_resolves_to_a_thread_detail(self):
         meta = json.loads((self.out / "data/lists/lkml/meta.json").read_text())
@@ -121,7 +121,7 @@ class SmokeTests(unittest.TestCase):
                 self.assertIn(str(r["n"]), shard)
                 self.assertEqual(shard[str(r["n"])]["t"][:50], r["t"][:50])
                 checked += 1
-        self.assertGreater(checked, 5)
+        self.assertGreater(checked, 2)
 
     def test_json_files_stay_small(self):
         biggest = max(f.stat().st_size for f in self.out.rglob("*.json"))
@@ -199,7 +199,7 @@ class CrossPostBuildTests(unittest.TestCase):
     def test_cross_posted_threads_are_deduplicated_and_chipped(self):
         out = Site.out
         lists = json.loads((out / "data/lists.json").read_text())
-        self.assertEqual(lists["totals"]["messages"], 25)
+        self.assertEqual(lists["totals"]["messages"], 14)  # the shown ones: series without a diff are not shown
         rows = json.loads((out / "data/lists/lkml/meta.json").read_text())
         n_lkml = sum(sum(v.values()) for v in rows["counts"].values())
         rows_b = json.loads((out / "data/lists/bpf/meta.json").read_text())

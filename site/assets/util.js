@@ -53,6 +53,27 @@
     return cache[path];
   };
 
+  /* A gzip compressed JSON file (diffs and message texts are stored compressed to keep the site small).
+   * Works whether the server sends it as is or already decoded it (Content-Encoding): the bytes are sniffed. */
+  LH.getGz = function (path) {
+    var key = 'gz:' + path;
+    if (!cache[key]) {
+      cache[key] = fetch(path, { credentials: 'omit' }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status + ' for ' + path);
+        return r.arrayBuffer();
+      }).then(function (buf) {
+        var u8 = new Uint8Array(buf);
+        if (u8.length > 2 && u8[0] === 0x1f && u8[1] === 0x8b) {
+          if (typeof DecompressionStream === 'undefined') throw new Error('This browser cannot unpack compressed data (DecompressionStream is missing).');
+          return new Response(new Blob([u8]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+        }
+        return new TextDecoder('utf-8').decode(u8);
+      }).then(function (text) { return JSON.parse(text); });
+      cache[key].catch(function () { delete cache[key]; });
+    }
+    return cache[key];
+  };
+
   /* ---------------------------------------------------------------- time */
   LH.now = function () { return Math.floor(Date.now() / 1000); };
   LH.timeAgo = function (ts) {
@@ -78,6 +99,7 @@
   LH.historyNote = function (hs, hc) {
     if (hc === 1) return { text: 'history back to ' + LH.shortDate(hs), title: 'The backfill finished: patch related mail is complete back to this date' };
     if (hc === 2) return { text: 'history back to ' + LH.shortDate(hs) + ' (capped)', title: 'A busy list: the backfill stopped at its page cap, older mail is on lore' };
+    if (hc === 3) return { text: 'newest series back to ' + LH.shortDate(hs), title: 'A busy list: the newest 1000 patches are stored, older series are on lore' };
     if (hc === 0) return { text: 'history back to ' + LH.shortDate(hs) + ', filling in', title: 'The backfill is still walking back in time over the next runs' };
     return { text: 'history since ' + LH.shortDate(hs), title: 'The oldest message LoreHub holds for this list' };
   };

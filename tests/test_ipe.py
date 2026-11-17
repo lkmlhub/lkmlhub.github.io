@@ -15,7 +15,7 @@ import unittest
 from lorehub.feed import parse_feed
 
 from . import ipe_fixture
-from .helpers import FIXTURES
+from .helpers import FIXTURES, diff_shard, jload, thread_bodies, thread_detail
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 LISTS = ["kexec", "keyrings", "linux-doc", "linux-security-module", "lkml"]
@@ -82,6 +82,46 @@ class IpeAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(d1["cm"]), 26)
         self.assertTrue(any(c["a"] == "Paul Moore" for c in d1["cm"]))
 
+    def test_conversation_is_complete_and_equals_the_real_thread(self):
+        """The reference is real-threads.json: the thread Atom of both cover letters as lore served it on 2026-11-17."""
+        real = json.loads((FIXTURES / "ipe/real-threads.json").read_text())
+        for key, row in (("v1", self.v1), ("v2", self.v2)):
+            ref = real[key]
+            home, d = self.detail(row)
+            mids = ([d["cover"]["mid"]] if "cover" in d else []) + [p["mid"] for p in d["patches"]] + [c["mid"] for c in d["cm"]]
+            self.assertEqual(sorted(mids), ref["mids"], key)  # every message of the thread, nothing else
+            self.assertEqual(d["c"], ref["replies"], key)
+            self.assertEqual(row["c"], ref["replies"], key)
+            self.assertEqual(d["mc"], ref["entries"], key)
+            bodies = thread_bodies(self.out, home, d["n"])
+            self.assertEqual(len(bodies), ref["entries"])
+            self.assertTrue(all(b is not None for b in bodies), key)  # the complete text of every message
+        self.assertEqual((real["v1"]["replies"], real["v2"]["replies"]), (26, 6))
+        self.assertEqual(real["v1"]["replies"] + real["v2"]["replies"], 32)  # "more than 20 replies across versions"
+
+    def test_the_files_changed_tab_has_diffs_for_all_patches_of_both_versions(self):
+        for row, patches in ((self.v1, 4), (self.v2, 3)):
+            home, d = self.detail(row)
+            shard = diff_shard(self.out, home, d["n"])
+            self.assertEqual(len(d["patches"]), patches)
+            self.assertEqual(set(shard), {p["mid"] for p in d["patches"]})
+            for p in d["patches"]:
+                self.assertNotIn("nd", p)
+                self.assertGreaterEqual(len(shard[p["mid"]]["f"]), 1)
+            self.assertEqual(d["cp"], 0, "no gap is left in the real threads")
+
+    def test_replies_are_nested_under_the_message_they_answer(self):
+        _, d = self.detail(self.v2)
+        order = [d["cover"]] + d["patches"] + d["cm"]
+        by_mid = {m["mid"]: i for i, m in enumerate(order)}
+        replies = [c for c in d["cm"] if "pi" in c]
+        self.assertEqual(len(replies), 6)
+        for c in replies:
+            self.assertIn("re", c)  # "in reply to <author>"
+            self.assertLess(c["pi"], len(order))
+        patch1 = by_mid[d["patches"][0]["mid"]]
+        self.assertTrue(any(c["pi"] == patch1 for c in replies))  # replies to patch 1 hang under patch 1
+
     def test_cross_posts_show_all_lists_that_carry_the_series(self):
         _, d2 = self.detail(self.v2)
         self.assertEqual(d2["lists"], LISTS)
@@ -110,7 +150,7 @@ class IpeAcceptanceTests(unittest.TestCase):
         self.assertEqual((d2["fc"], d2["fa"], d2["fd"]), (len(files), add, rem))
         self.assertEqual(d2["df"], 1)
         home = d2["home"]
-        shard = json.loads((self.out / ("data/diffs/%s/%d.json" % (home, d2["n"]))).read_text())["p"]
+        shard = diff_shard(self.out, home, d2["n"])
         self.assertEqual(set(shard), {p["mid"] for p in d2["patches"]})
         self.assertEqual({f["p"] for d in shard.values() for f in d["f"]}, files)
         self.assertIn("security/ipe/", " ".join(files))
@@ -120,7 +160,7 @@ class IpeAcceptanceTests(unittest.TestCase):
     def test_v1_has_its_own_diffs(self):
         _, d1 = self.detail(self.v1)
         self.assertEqual(d1["df"], 1)
-        shard = json.loads((self.out / ("data/diffs/%s/%d.json" % (d1["home"], d1["n"]))).read_text())["p"]
+        shard = diff_shard(self.out, d1["home"], d1["n"])
         self.assertEqual(len(shard), 4)
         paths = {f["p"] for d in shard.values() for f in d["f"]}
         self.assertTrue(any(p.startswith("tools/testing/selftests/ipe") or "selftests" in p for p in paths))

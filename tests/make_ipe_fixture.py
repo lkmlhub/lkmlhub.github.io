@@ -1,6 +1,10 @@
 """Build tests/fixtures/ipe from real lore responses (run by hand, not by the tests).
 
-usage: python3 tests/make_ipe_fixture.py CACHE2_DIR
+usage: python3 tests/make_ipe_fixture.py CACHE2_DIR [CACHE3_DIR]
+
+With CACHE3_DIR (live thread Atoms of the two cover letters fetched on 2026-11-17, ipe-v1-cover-t.atom and
+ipe-v2-cover-t.atom) the script also writes real-threads.json: for each version the message count of the REAL thread
+as lore served it (cover, patches, replies and their message-ids), the reference of the acceptance test.
 
 Input (saved live responses): thread Atom feeds of the "ipe: add the .ipe policy keyring" series
 (v1 RFC posted 2026-10-19, v2 posted 2026-10-29) as carried by five lists, and the pages of a real
@@ -36,7 +40,7 @@ def mid_of(entry):
     return mid_from_href(re.search(r'<link\s+href="([^"]+)"', entry).group(1))
 
 
-def main(cache2):
+def main(cache2, cache3=None):
     cache2 = Path(cache2)
     fake = {}
 
@@ -54,6 +58,22 @@ def main(cache2):
                 mid = mid_of(e)
                 entries[mid] = e
                 member.setdefault(name, []).append(mid)
+    if cache3:
+        real = {}
+        for v in (1, 2):
+            f = Path(cache3) / ("ipe-v%d-cover-t.atom" % v)
+            mids, replies, patches = [], 0, 0
+            for e in entries_of(f):
+                e = EMAIL.sub(sub, e)
+                mids.append(mid_of(e))
+                title = re.search(r"<title[^>]*>([^<]*)</title>", e).group(1)
+                if title.lstrip().lower().startswith("re:"):
+                    replies += 1
+                else:
+                    patches += 1
+            real["v%d" % v] = {"entries": len(mids), "cover_and_patches": patches, "replies": replies, "mids": sorted(mids)}
+        (HERE / "real-threads.json").write_text(json.dumps(real, indent=1), "utf-8")
+        print({k: (r["entries"], r["replies"]) for k, r in real.items()})
     ipe = set(entries)
     decoys = 0
     for f in sorted(glob.glob(str(cache2 / "lsm-bf" / "*.atom"))):
@@ -83,4 +103,4 @@ def main(cache2):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(*sys.argv[1:3])
