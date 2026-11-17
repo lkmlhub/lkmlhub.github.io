@@ -139,7 +139,8 @@ def merge_unthreaded_series(comps, msgs):
         if t is None:
             continue
         s = t.subj
-        if s.is_patch_message and s.kind == "patch" and s.total and s.total > 1 and len(members) == 1:
+        if s.is_patch_message and s.kind == "patch" and s.total and s.total > 1 and \
+                sum(1 for x in members if x.subj.is_patch_message) == 1:
             cands.setdefault((t.h, s.version, s.total), []).append(t)
     for group in cands.values():
         group.sort(key=lambda m: m.t)

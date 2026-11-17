@@ -40,5 +40,16 @@ class GhostGroupingTests(unittest.TestCase):
         self.assertEqual(len(later[0].comments), 1)
 
 
+class UnthreadedSeriesTests(unittest.TestCase):
+    def test_unthreaded_series_is_joined_even_when_a_patch_has_replies(self):
+        ents, _ = load({"lkml": [
+            raw("p1", "[PATCH 1/2] foo: bar", "Alice", t=NOW - 7200),
+            raw("p2", "[PATCH 2/2] foo: baz", "Alice", t=NOW - 7190),
+            raw("r1", "Re: [PATCH 1/2] foo: bar", "Bob", parent="p1", t=NOW - 3600, body="Reviewed-by: Bob <b@example.test>\n")]})
+        self.assertEqual(len(ents), 1)
+        self.assertEqual((len(ents[0].patches), len(ents[0].comments)), (2, 1))
+        self.assertFalse(ents[0].partial)
+
+
 if __name__ == "__main__":
     unittest.main()

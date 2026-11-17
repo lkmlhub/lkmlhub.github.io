@@ -19,6 +19,27 @@ def raw(mid, subject, name="Alice Author", email=None, t=NOW - 3600, parent="", 
     }
 
 
+def atom(entries, list_name="x"):
+    """Atom document (as public-inbox serves it) for raw entries, newest first."""
+    import html
+    from lorehub.feed import format_time
+
+    out = ['<?xml version="1.0" encoding="us-ascii"?>\n<feed xmlns="http://www.w3.org/2005/Atom" '
+           'xmlns:thr="http://purl.org/syndication/thread/1.0"><title>t</title><updated>2026-11-16T00:00:00Z</updated>']
+    for e in sorted(entries, key=lambda e: -e["ts"] if "ts" in e else -e["t"]):
+        ts = e.get("ts", e.get("t"))
+        parent = ('<thr:in-reply-to ref="r" href="https://lore.kernel.org/%s/%s/"/>' % (list_name, e["parent"])
+                  if e.get("parent") else "")
+        out.append(
+            "<entry><author><name>%s</name><email>%s</email></author><title>%s</title><updated>%s</updated>"
+            '<link href="https://lore.kernel.org/%s/%s/"/><id>urn:uuid:x</id>%s<content type="xhtml">'
+            '<div xmlns="http://www.w3.org/1999/xhtml"><pre style="white-space:pre-wrap">%s</pre></div></content></entry>'
+            % (html.escape(e["name"]), html.escape(e["email"]), html.escape(e["subject"]), format_time(ts),
+               list_name, e["mid"], parent, html.escape(e["body"], quote=False)))
+    out.append("</feed>")
+    return "".join(out).encode()
+
+
 def make_state(lists, now=NOW):
     """lists: {list name: [raw entries]} -> (State, tempdir object)."""
     tmp = tempfile.TemporaryDirectory()
