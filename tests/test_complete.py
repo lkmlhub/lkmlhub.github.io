@@ -207,8 +207,8 @@ class QueueTests(unittest.TestCase):
         rec = data["msgs"]["a-3"]
         self.assertIn("dz", rec)
         self.assertEqual(rec["bv"], 3)
-        self.assertIn("a-3", self.state.load_diff_day("l", next(iter(self.state.diff_days("l")))) | {"a-3": 1}.keys() and
-                      {m for d in self.state.diff_days("l") for m in self.state.load_diff_day("l", d)})
+        stored = {m for d in self.state.diff_days("l") for m in self.state.load_diff_day("l", d)}
+        self.assertIn("a-3", stored)
         ents, msgs = entities_of(full)
         self.assertEqual(find_gaps(ents[0], msgs), "")
 

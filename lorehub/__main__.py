@@ -9,7 +9,7 @@ from .backfill import Config, run_backfill as backfill_run
 from .complete import Config as CompleteConfig, run_completion
 from .crawl import CacheSource, LiveSource, crawl
 from .fetch import Fetcher
-from .retention import Limits, effective_retention
+from .retention import Limits, apply_meta_limits, effective_retention, trim_to_budget
 from .state import MAX_DIFF_MSGS, State
 
 
@@ -35,19 +35,22 @@ def add_backfill_args(p, default_days=180):
     p.add_argument("--backfill-list-pages", type=int, default=60,
                    help="max 200-entry pages per list (a safety cap, busy lists stop earlier when their newest "
                         "1000 patches are stored)")
+    p.add_argument("--max-state-mb", type=float, default=650,
+                   help="data branch budget in MB: above it the per list patch limit is lowered (0 = off, default 650)")
     p.add_argument("--max-diff-msgs", type=int, default=MAX_DIFF_MSGS,
                    help="patch messages per list that keep a diff, whole series newest first (default %d)" % MAX_DIFF_MSGS)
 
 
-def backfill_config(args, budget_s=None):
+def backfill_config(args, budget_s=None, limits=None):
     return Config(days=args.backfill_days, budget_s=args.backfill_min * 60 if budget_s is None else budget_s,
                   max_requests=args.backfill_requests, max_total=args.backfill_total,
                   list_pages=args.backfill_list_pages, keep_bodies=not getattr(args, "no_bodies", False),
-                  fill_patches=int(args.max_diff_msgs * 1.1))
+                  fill_patches=int((limits.max_diff_msgs if limits else args.max_diff_msgs) * 1.1))
 
 
-def limits_of(args):
-    return Limits(retention_days=effective_retention(args.backfill_days), max_diff_msgs=args.max_diff_msgs)
+def limits_of(args, state=None):
+    lim = Limits(retention_days=effective_retention(args.backfill_days), max_diff_msgs=args.max_diff_msgs)
+    return apply_meta_limits(state, lim) if state is not None else lim
 
 
 def add_crawl_args(p):
@@ -73,6 +76,7 @@ def add_build_args(p):
 
 def run_crawl(args):
     state = State(args.state)
+    limits = limits_of(args, state)
     now = int(time.time())
     started = time.monotonic()
     if args.from_cache:
@@ -82,7 +86,7 @@ def run_crawl(args):
     summary = crawl(
         state, source, now, names=split_lists(args.lists), budget_s=args.budget_min * 60,
         deep_budget=args.deep_budget, deep_pages=args.deep_pages,
-        keep_bodies=not args.no_bodies, log=log, limits=limits_of(args),
+        keep_bodies=not args.no_bodies, log=log, limits=limits,
     )
     log("crawl summary: %s" % summary)
     if args.backfill_days > 0 and not summary["aborted"]:
@@ -90,8 +94,8 @@ def run_crawl(args):
         left = args.budget_min * 60 - (time.monotonic() - started)
         budget = min(args.backfill_min * 60, left)
         if budget >= 30:
-            summary["backfill"] = backfill_run(state, source, now, backfill_config(args, budget),
-                                               names=split_lists(args.lists), log=log, limits=limits_of(args))
+            summary["backfill"] = backfill_run(state, source, now, backfill_config(args, budget, limits),
+                                               names=split_lists(args.lists), log=log, limits=limits)
         else:
             log("backfill skipped: the crawl used the whole time budget")
     if args.complete_requests > 0 and not summary["aborted"] and not summary.get("backfill", {}).get("aborted"):
@@ -101,9 +105,13 @@ def run_crawl(args):
         if budget >= 30:
             summary["completion"] = run_completion(
                 state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=budget),
-                names=split_lists(args.lists), touched=touched, log=log, limits=limits_of(args), days=args.backfill_days)
+                names=split_lists(args.lists), touched=touched, log=log, limits=limits, days=args.backfill_days)
         else:
             log("thread completion skipped: the run used the whole time budget")
+    if args.max_state_mb > 0:
+        trimmed = trim_to_budget(state, now, int(args.max_state_mb * 1e6), limits, log=log)
+        if trimmed:
+            summary["trimmed_to"] = trimmed
     return summary
 
 
@@ -113,8 +121,9 @@ def run_backfill(args):
     names = split_lists(args.lists)
     if args.backfill_days <= 0:
         sys.exit("--backfill-days must be positive")
-    return backfill_run(state, source, int(time.time()), backfill_config(args), names=names, log=log,
-                        limits=limits_of(args))
+    limits = limits_of(args, state)
+    return backfill_run(state, source, int(time.time()), backfill_config(args, None, limits), names=names, log=log,
+                        limits=limits)
 
 
 def run_complete(args):
@@ -122,7 +131,7 @@ def run_complete(args):
     source = CacheSource(args.from_cache) if args.from_cache else LiveSource(Fetcher(), args.save_raw)
     now = int(time.time())
     return run_completion(state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=args.complete_min * 60),
-                          names=split_lists(args.lists), touched=None, log=log, limits=limits_of(args), days=args.backfill_days)
+                          names=split_lists(args.lists), touched=None, log=log, limits=limits_of(args, state), days=args.backfill_days)
 
 
 def run_build(args):

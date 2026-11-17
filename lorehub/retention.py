@@ -109,3 +109,51 @@ def finalize_list(state, name, data, now, lim=None):
     summary = enforce(data, name, now, lim)
     state.save_list(name, data)
     return summary
+
+
+MIN_KEEP = 25  # the state budget never lowers the per list limit below this
+
+
+def state_bytes(state):
+    """Bytes of the data branch content that grows: message and diff day files."""
+    total = 0
+    for sub in ("lists", "diffs"):
+        d = state.root / sub
+        if d.is_dir():
+            total += sum(p.stat().st_size for p in d.rglob("*.json.gz"))
+    return total
+
+
+def apply_meta_limits(state, lim):
+    """Lower the per list patch limit to the one a previous run had to set to stay inside the state budget."""
+    cap = state.load_meta().get("limits", {}).get("max_diff_msgs")
+    if cap and cap < lim.max_diff_msgs:
+        lim.max_diff_msgs = cap
+    return lim
+
+
+def trim_to_budget(state, now, max_bytes, lim=None, log=print):
+    """Keep the data branch below `max_bytes`: when the state is over it, lower the per list limit of patch
+    messages that keep a diff (recorded in meta.json, so later runs keep it) and apply it to every list at
+    once. Whole series go, newest stay (see enforce). Returns the new limit or None when nothing was needed."""
+    lim = lim or Limits()
+    size = state_bytes(state)
+    if not max_bytes or size <= max_bytes:
+        return None
+    cap = lim.max_diff_msgs
+    for _ in range(4):
+        cap = max(MIN_KEEP, int(cap * max_bytes * 0.92 / size))
+        log("state is %.0f MB, over its %.0f MB budget: keeping at most %d patch messages with a diff per list" % (
+            size / 1e6, max_bytes / 1e6, cap))
+        trimmed = Limits(lim.retention_days, lim.max_msgs, lim.max_body_msgs, lim.body_days, cap)
+        for name in state.list_names():
+            data = state.load_list(name)
+            finalize_list(state, name, data, now, trimmed)
+        size = state_bytes(state)
+        if size <= max_bytes or cap <= MIN_KEEP:
+            break
+    meta = state.load_meta()
+    meta.setdefault("limits", {})["max_diff_msgs"] = cap
+    state.save_meta(meta)
+    lim.max_diff_msgs = cap
+    return cap

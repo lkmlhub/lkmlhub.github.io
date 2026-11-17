@@ -52,3 +52,8 @@ assert.strictEqual(a.dirs.get('b').files.length, 2);
 assert.strictEqual(JSON.stringify(tree.files.map((f) => f.name)), JSON.stringify(['toString']));
 assert.strictEqual(Object.prototype.polluted, undefined);
 console.log('files.js ok');
+
+// "diffs for patches 4-7 are not stored"
+assert.strictEqual(T.ranges([4, 5, 6, 7]), '4-7');
+assert.strictEqual(T.ranges([7, 1, 2, 5]), '1-2, 5, 7');
+assert.strictEqual(T.ranges([3]), '3');
