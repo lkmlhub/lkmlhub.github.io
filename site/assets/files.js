@@ -14,21 +14,22 @@
 
   /* ---------------------------------------------------------------- pure helpers (no DOM) */
 
-  /* Rows of one file part: [{t: 'hunk'|'add'|'del'|'ctx'|'note', o, n, s}] from raw hunk text. */
+  /* Rows of one file part: [{t: 'hunk'|'add'|'del'|'ctx'|'note', o, n, s, ix}] from raw hunk text; ix is the index of the
+   * line in the text, which is how a review comment names its line (the same in both layouts). */
   function parseHunks(text) {
     var rows = [], o = 0, n = 0;
-    String(text || '').split('\n').forEach(function (line) {
+    String(text || '').split('\n').forEach(function (line, ix) {
       var m = HUNK.exec(line);
       if (m) {
         o = parseInt(m[1], 10); n = parseInt(m[3], 10);
-        rows.push({ t: 'hunk', s: line });
+        rows.push({ t: 'hunk', s: line, ix: ix });
         return;
       }
       var c = line.charAt(0), rest = line.slice(1);
-      if (c === '+') rows.push({ t: 'add', n: n++, s: rest });
-      else if (c === '-') rows.push({ t: 'del', o: o++, s: rest });
-      else if (c === '\\') rows.push({ t: 'note', s: line });
-      else rows.push({ t: 'ctx', o: o++, n: n++, s: c === ' ' ? rest : line });
+      if (c === '+') rows.push({ t: 'add', n: n++, s: rest, ix: ix });
+      else if (c === '-') rows.push({ t: 'del', o: o++, s: rest, ix: ix });
+      else if (c === '\\') rows.push({ t: 'note', s: line, ix: ix });
+      else rows.push({ t: 'ctx', o: o++, n: n++, s: c === ' ' ? rest : line, ix: ix });
     });
     return rows;
   }

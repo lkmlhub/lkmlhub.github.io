@@ -1,0 +1,37 @@
+From: Jane Reviewer <jane@example.test>
+To: Manuel Huber via B4 Relay <user1@example.test>
+Cc: kexec@lists.example.test, keyrings@lists.example.test,
+ linux-doc@lists.example.test, linux-security-module@lists.example.test,
+ lkml@lists.example.test, sashiko-bot <user11@example.test>, Andrew Halaney
+ <user51@example.test>, Fan Wu <user20@example.test>, Manuel Huber
+ <user5@example.test>
+Subject: Re: [PATCH v2 1/3] ipe: add the .ipe policy keyring
+In-Reply-To: <user45@example.test>
+References: <user44@example.test> <user45@example.test>
+Date: Mon, 16 Nov 2026 23:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-Unsent: 1
+
+On Thu, 29 Oct 2026 00:31:21 +0000, Manuel Huber via B4 Relay wrote:
+> diff --git a/security/ipe/keyring.c b/security/ipe/keyring.c
+> --- /dev/null
+> +++ b/security/ipe/keyring.c
+> @@ -0,0 +1,30 @@
+> +int __init ipe_keyring_init(void)
+> +{
+> +	ipe_keyring =
+> +		keyring_alloc(".ipe", GLOBAL_ROOT_UID, GLOBAL_ROOT_GID,
+
+Why not KEY_ALLOC_BUILT_IN here? The keyring is never freed.
+
+[...]
+
+> +				KEY_USR_SEARCH | KEY_USR_SETATTR,
+> +			      KEY_ALLOC_NOT_IN_QUOTA, NULL, NULL);
+> +	if (IS_ERR(ipe_keyring))
+> +		panic("failed to allocate \".ipe\" keyring");
+
+The message could say what failed, for example the error code from
+keyring_alloc().

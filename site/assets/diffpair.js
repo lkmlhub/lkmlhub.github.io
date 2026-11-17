@@ -1,7 +1,7 @@
 /* Split diff pairing: turns the parsed lines of one hunk list (files.js parseHunks) into side by side rows, and finds
  * the changed middle of a removed/added pair. Pure functions, no DOM, so they run in a browser and in node (tests/js).
  *
- * input line:  {t: 'hunk'|'ctx'|'del'|'add'|'note', o, n, s}
+ * input line:  {t: 'hunk'|'ctx'|'del'|'add'|'note', o, n, s, ix}   (ix: index of the line in the file's hunk text, kept on the cell)
  * output row:  {left, right} with cells {t: 'ctx'|'del'|'add'|'empty'|'note', no, s, hl}
  *              or {span: true, left, right} for hunk headers and notes that belong to no line (left === right). */
 (function (root) {
@@ -52,7 +52,7 @@
     });
   }
 
-  function cell(l, t, no) { return { t: t, no: no, s: l.s, hl: l.hl }; }
+  function cell(l, t, no) { return { t: t, no: no, s: l.s, hl: l.hl, ix: l.ix }; }
   var EMPTY = { t: 'empty' };
 
   function pairRows(lines) {

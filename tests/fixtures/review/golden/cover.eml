@@ -1,0 +1,23 @@
+From: Jane Reviewer <jane@example.test>
+To: Manuel Huber via B4 Relay <user1@example.test>
+Cc: kexec@lists.example.test, keyrings@lists.example.test,
+ linux-doc@lists.example.test, linux-security-module@lists.example.test,
+ lkml@lists.example.test, sashiko-bot <user11@example.test>, Andrew Halaney
+ <user51@example.test>, Fan Wu <user20@example.test>, Manuel Huber
+ <user5@example.test>
+Subject: Re: [PATCH v2 0/3] IPE: add a dedicated policy keyring
+In-Reply-To: <user44@example.test>
+References: <user44@example.test>
+Date: Mon, 16 Nov 2026 23:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-Unsent: 1
+
+On Thu, 29 Oct 2026 00:31:22 +0000, Manuel Huber via B4 Relay wrote:
+
+Thanks for the v2. The structure looks right to me and the new Kconfig
+symbol keeps the default behaviour.
+A few small things inline.
+
+Reviewed-by: Jane Reviewer <jane@example.test>

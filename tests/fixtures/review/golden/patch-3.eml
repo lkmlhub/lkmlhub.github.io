@@ -1,0 +1,28 @@
+From: Jane Reviewer <jane@example.test>
+To: Manuel Huber via B4 Relay <user1@example.test>
+Cc: kexec@lists.example.test, keyrings@lists.example.test,
+ linux-doc@lists.example.test, linux-security-module@lists.example.test,
+ lkml@lists.example.test, sashiko-bot <user11@example.test>, Andrew Halaney
+ <user51@example.test>, Fan Wu <user20@example.test>, Manuel Huber
+ <user5@example.test>
+Subject: Re: [PATCH v2 3/3] Documentation: ipe: document the IPE keyring
+In-Reply-To: <user47@example.test>
+References: <user44@example.test> <user47@example.test>
+Date: Mon, 16 Nov 2026 23:00:00 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-Unsent: 1
+
+On Thu, 29 Oct 2026 00:31:21 +0000, Manuel Huber via B4 Relay wrote:
+> diff --git a/Documentation/security/ipe.rst b/Documentation/security/ipe.rst
+> --- a/Documentation/security/ipe.rst
+> +++ b/Documentation/security/ipe.rst
+> @@ -248,11 +248,20 @@ policy updates have to be done rebootlessly.
+>  To allow an update from an external source, it could be potentially malicious,
+>  so this policy needs to have a way to be identified as trusted. This is
+> -done via a signature chained to a trust source in the kernel. Arbitrarily,
+> -this is  the ``SYSTEM_TRUSTED_KEYRING``, a keyring that is initially
+
+The old wording "initially populated at compile-time" was useful, please
+keep one sentence about it.
