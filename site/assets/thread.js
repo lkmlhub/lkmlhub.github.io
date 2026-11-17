@@ -71,7 +71,7 @@
           m.a ? h('a', { href: LH.authorHref(m.ah), class: 'strong' }, m.a) : h('span', { class: 'strong' }, 'Unknown'),
           h('span', { class: 'muted' }, ' ' + verb + ' '), LH.timeEl(m.o),
           replyContext(m),
-          h('span', { class: 'spacer' }), flagChips(m), loreLink(ctx.d, m, 'lore')),
+          h('span', { class: 'spacer' }), flagChips(m), loreLink(ctx.d, m, 'View on lore')),
         bodyNode(ctx, i)));
   }
 

@@ -15,7 +15,7 @@ import unittest
 from lorehub.feed import parse_feed
 
 from . import ipe_fixture
-from .helpers import FIXTURES, diff_shard, jload, site_texts, thread_bodies, thread_detail
+from .helpers import FIXTURES, diff_shard, jload, site_texts, thread_bodies
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 LISTS = ["kexec", "keyrings", "linux-doc", "linux-security-module", "lkml"]

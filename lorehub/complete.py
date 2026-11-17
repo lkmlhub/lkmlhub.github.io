@@ -27,7 +27,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 
-from .crawl import ingest, thread_url  # noqa: F401
+from .crawl import ingest, thread_url  # thread_url is re-exported for callers and tests
 from .feed import parse_feed
 from .fetch import FetchError
 from .model import compute_status, link_versions

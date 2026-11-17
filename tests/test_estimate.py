@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lorehub.state import MAX_DIFF_MSGS, State
+from lorehub.state import MAX_DIFF_MSGS
 
 from .helpers import NOW, make_state, raw
 

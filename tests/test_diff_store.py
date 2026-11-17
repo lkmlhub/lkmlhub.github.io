@@ -13,7 +13,7 @@ from lorehub.feed import to_record
 from lorehub.retention import Limits, finalize_list
 from lorehub.state import MAX_DIFF_MSGS, State, day_of, merge_records, stash_diffs
 
-from .helpers import NOW, diff_shard, jload, make_state, raw, thread_detail
+from .helpers import NOW, jload, make_state, raw, thread_detail
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 quiet = lambda m: None  # noqa: E731

@@ -6,9 +6,8 @@ import threading
 import unittest
 from pathlib import Path
 
-from lorehub import complete
 from lorehub.build import build_site
-from lorehub.complete import Config, coverage, find_gaps, orphan_keys, root_of, run_completion, scan_list, thread_url
+from lorehub.complete import Config, coverage, find_gaps, orphan_keys, run_completion, scan_list, thread_url
 from lorehub.crawl import thread_file
 from lorehub.fetch import FetchError
 from lorehub.feed import parse_feed
