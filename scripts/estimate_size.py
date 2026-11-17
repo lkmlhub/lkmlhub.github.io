@@ -41,7 +41,7 @@ FIXED_DATA = 1_500_000  # manifest, meta, numbers
 ASSETS = 400_000
 GZ_THREADS = 0.30  # gzip ratio of the thread detail shards when they are stored compressed (measured on lkml)
 BACKFILL_SHARE = 0.87  # patch related share of a list's traffic (search query)
-ENTRIES_PER_PATCH = 2.8  # search entries (patch messages, covers, tagged replies) per patch message with a diff
+ENTRIES_PER_PATCH = 3.0  # search entries (patch messages, covers, tagged replies) per patch message with a diff
 
 
 def rates(state):

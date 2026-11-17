@@ -35,3 +35,28 @@
 - In the real acceptance series the cover letter ("IPE: add a dedicated policy keyring") is titled differently from
   patch 1 ("ipe: add the .ipe policy keyring"): versions link on the cover letter title, the pull request is named
   after it, and the search index also holds the patch subjects so both names find it.
+
+## Follow-up 3: complete conversations, only series with "Files changed", 180 days, 1000 diffs per list
+
+- [x] D1 `MAX_DIFF_MSGS` 1000, kept by whole series, newest first (`retention.py`)
+- [x] D2 horizon 180 days everywhere (code, CLI, workflow, README, About, docs); retention follows the horizon
+- [x] D3 build time invariant: only series with a stored diff are shown, in no list, count, feed, profile or search entry
+      (`tests/invariants.py`); partial diffs get a notice; git pull requests are discussions
+- [x] D4 complete bodies (128 KB cap, quotes, trailers), thread tree (`pi`, "in reply to"), replies under their patch, collapsed
+      quotes, participants, message count; gap detection and the resumable thread completion queue (`complete.py`, `t.atom`)
+- [x] D5 sizes measured on real data (`scripts/estimate_size.py`), thread shards gzip, 100 discussions per list, eviction by whole
+      series, site cap 700 MB, data budget 650 MB, hourly workflow with incremental pushes and a daily squash
+- [x] D6 state epoch migration (old state kept, backfill cursors restarted, converges), per list walk stops when the newest 1000
+      patches are stored, page cap 60
+- [x] D7 polite as before: 2 concurrent requests, 0.5 s apart, Retry-After; 113 live requests in this task
+- [x] screenshots of the PR page (Conversation, Commits, Files changed; light and dark; desktop and phone) from the ipe fixture
+
+## Findings along the way (follow-up 3)
+
+- A new orphan commit per run re-sends the whole data branch (git cannot use the server's copy of unrelated history). The earlier claim
+  that day segmented files made the squashed push small was wrong; measured and fixed with incremental commits and a daily squash.
+- The search walk is almost complete for tagged mail: 0 of 81 fetched threads (6 lists) lacked a message inside the walked window.
+  Flagged gaps were window edges or patches sent to other lists only.
+- v2 of the ipe series really has 6 replies; the 26 replies belong to v1, a separate thread on lore (32 across versions).
+- A reply whose parent is missing is not part of the series' thread in the model (it forms an entity of its own), so such gaps
+  are found by matching its subject to the series' patches.
