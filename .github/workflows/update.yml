@@ -1,7 +1,8 @@
 name: update
 
-# Crawl lore.kernel.org politely, accumulate history on the `data` branch, build the static
-# site and deploy it to GitHub Pages. Never run overlapping updates.
+# Crawl lore.kernel.org politely, accumulate history on the `data` branch, walk every list back in
+# time (resumable backfill, small lists first), build the static site and deploy it to GitHub Pages.
+# Never run overlapping updates.
 on:
   schedule:
     - cron: "*/30 * * * *"
@@ -11,7 +12,13 @@ on:
         description: "Crawl time budget in minutes"
         default: "25"
       deep_budget:
-        description: "Max search-atom requests per run to fill gaps on busy lists (empty uses the repository variable LOREHUB_DEEP_BUDGET, default 0 = off)"
+        description: "Max search-atom requests per run to sweep gaps on busy lists (empty uses the repository variable LOREHUB_DEEP_BUDGET, default 12, 0 = off)"
+        default: ""
+      backfill_days:
+        description: "History horizon of the backfill in days (empty uses the repository variable LOREHUB_BACKFILL_DAYS, default 90, 0 = off)"
+        default: ""
+      backfill_minutes:
+        description: "Backfill time budget per run in minutes, taken out of the crawl budget (default 12)"
         default: ""
   push:
     branches: [main]
@@ -67,7 +74,10 @@ jobs:
       - name: Crawl and build
         env:
           BUDGET: ${{ github.event.inputs.budget_minutes || '25' }}
-          DEEP: ${{ github.event.inputs.deep_budget || vars.LOREHUB_DEEP_BUDGET || '0' }}
+          DEEP: ${{ github.event.inputs.deep_budget || vars.LOREHUB_DEEP_BUDGET || '12' }}
+          BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || vars.LOREHUB_BACKFILL_DAYS || '90' }}
+          BACKFILL_MIN: ${{ github.event.inputs.backfill_minutes || vars.LOREHUB_BACKFILL_MINUTES || '12' }}
+          BACKFILL_TOTAL: ${{ vars.LOREHUB_BACKFILL_TOTAL || '4000' }}
         run: |
           REPO="${GITHUB_REPOSITORY#*/}"
           if [[ "$REPO" == *.github.io ]]; then BASE="/"; else BASE="/$REPO/"; fi
@@ -76,7 +86,9 @@ jobs:
             --out public \
             --base "$BASE" \
             --budget-min "$BUDGET" \
-            --deep-budget "$DEEP" --deep-pages 2 | tee crawl.log
+            --deep-budget "$DEEP" --deep-pages 2 \
+            --backfill-days "$BACKFILL_DAYS" --backfill-min "$BACKFILL_MIN" \
+            --backfill-total "$BACKFILL_TOTAL" | tee crawl.log
           {
             echo "### LoreHub update"
             echo '```'

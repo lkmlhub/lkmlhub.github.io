@@ -70,6 +70,18 @@ def order(names, ml):
     return sorted(names, key=key)
 
 
+def stored_rate(state, name):
+    """Messages per day over the newest 25 stored messages of a list, like the feed based estimate."""
+    try:
+        ts = sorted((r["t"] for r in state.load_list(name)["msgs"].values()), reverse=True)[:25]
+    except StateError:
+        return 0.0
+    if len(ts) < 2:
+        return 0.0
+    span = ts[0] - ts[-1]
+    return round((len(ts) - 1) / span * DAY, 1) if span > 0 else 1e5
+
+
 def next_cursor(bf, entries, hz):
     """Oldest time reached after a page. Always strictly older than the previous cursor."""
     ts = [e["ts"] for e in entries if e["ts"] > 0]
@@ -99,6 +111,10 @@ def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time
         bfm.update(days=cfg.days, last=now)
         state.save_meta(meta)
         return summary
+    for n in queue:  # state written before the backfill existed has no rate: derive it once from the stored messages
+        if "rt" not in ml.setdefault(n, {}):
+            ml[n]["rt"] = stored_rate(state, n)
+    queue = order(queue, ml)
     log("backfill: %d of %d lists to go, horizon %s" % (len(queue), len(universe), time.strftime("%Y-%m-%d", time.gmtime(hz))))
     bfm.setdefault("since", now)
     open_lists = {}  # list name -> in-memory list data not yet saved

@@ -189,9 +189,25 @@ class BackfillTests(unittest.TestCase):
         for c in src.calls:
             if c[0] not in first:
                 first.append(c[0])
-        self.assertEqual(first, ["tiny", "mid", "big", "unknown"])
+        self.assertEqual(first, ["unknown", "tiny", "mid", "big"])  # no stored messages and no rate: the cheapest list
         self.assertLessEqual(src.max_active, 2)
         self.assertEqual(order(["b", "a", "c"], {"b": {"rt": 5}, "c": {"rt": 1}}), ["c", "b", "a"])
+
+    def test_old_state_without_rates_is_ordered_from_the_stored_messages(self):
+        from lorehub.crawl import ingest
+        for name, n, step in (("busy", 30, 600), ("calm", 30, DAY // 2), ("empty", 0, 1)):
+            _, data = ingest(self.state, name, entries(name[0], n, step=step), NOW) if n else (0, {"msgs": {}})
+            if n:
+                self.state.save_list(name, data)
+        self.state.save_meta({"lists": {"busy": {}, "calm": {}, "empty": {}}})
+        src = FakeSource({"busy": entries("b", 3), "calm": entries("c", 3), "empty": []})
+        self.run_bf(src, names=["busy", "calm", "empty"])
+        first = []
+        for c in src.calls:
+            if c[0] not in first:
+                first.append(c[0])
+        self.assertEqual(first, ["empty", "calm", "busy"])
+        self.assertIn("rt", self.state.load_meta()["lists"]["busy"])
 
     def test_failure_is_recorded_and_other_lists_continue(self):
         self.run_bf(FakeSource({"ok": entries("o", 4), "bad": entries("b", 4)}), names=["ok"])
