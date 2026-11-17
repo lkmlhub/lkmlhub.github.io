@@ -373,8 +373,8 @@ conversation, the update also looks for series that look incomplete and fetches 
 
 **Measured on real data** (live, 2026-11-17; 6 lists; the walked window of each list; `scratch/measure_gaps.py`,
 `measure_threads.py` in the run directory): incomplete series after the search walk: linux-security-module 9 of 171 (5.3 %), bpf 4 of 65
-(6.2 %), selinux 1 of 43 (2.3 %), netdev 2 of 113 (1.8 %), lkml 2 of 127 (1.6 %), linux-mm 0 of 71. 81 whole threads were fetched
-(all 14 flagged series, 72 complete-looking ones as a control; 113 requests of the 200 allowed in total): **0 messages inside the walked
+(6.2 %), selinux 1 of 43 (2.3 %), netdev 2 of 113 (1.8 %), lkml 2 of 127 (1.6 %), linux-mm 0 of 71. 83 whole threads were fetched
+(the 17 flagged series, 66 complete-looking ones as a control; 116 requests of the 200 allowed in total): **0 messages inside the walked
 window were missing** (18 messages were older than the walked window of a 29 day walk, from an earlier send of the same series: they
 are inside the 180 day horizon and come with the full walk). So the search walk is complete for tagged mail, the flagged gaps were
 boundary effects or patches that were sent to other lists only, and replies with an edited subject were not found in this sample

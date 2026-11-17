@@ -55,7 +55,7 @@
 
 - A new orphan commit per run re-sends the whole data branch (git cannot use the server's copy of unrelated history). The earlier claim
   that day segmented files made the squashed push small was wrong; measured and fixed with incremental commits and a daily squash.
-- The search walk is almost complete for tagged mail: 0 of 81 fetched threads (6 lists) lacked a message inside the walked window.
+- The search walk is almost complete for tagged mail: 0 of 83 fetched threads (6 lists) lacked a message inside the walked window.
   Flagged gaps were window edges or patches sent to other lists only.
 - v2 of the ipe series really has 6 replies; the 26 replies belong to v1, a separate thread on lore (32 across versions).
 - A reply whose parent is missing is not part of the series' thread in the model (it forms an entity of its own), so such gaps

@@ -226,7 +226,7 @@ origins, and a WCAG contrast check of every colour pair in both themes.
 * **History is bounded.** `new.atom` carries 25 messages; the backfill adds patch related mail back to 180 days
   (see above) but not threads without a patch tag, and not replies whose subject lost the tag unless the thread
   completion fetches them (it does for series that look incomplete; a series that looks complete but misses an
-  edited-subject reply is not noticed: 0 of 81 sampled threads, but it is not impossible). Completeness is per list archive.
+  edited-subject reply is not noticed: 0 of 83 sampled threads, but it is not impossible). Completeness is per list archive.
   The busiest lists (`lkml`, `netdev`, ...) keep only their newest 1 000 patch messages, a day or two for `lkml`. Every list
   card says how far its history reaches, every search page links to the same query on lore.kernel.org.
 * **Series without a stored diff are not shown.** That includes old series of busy lists, series evicted when the site would
