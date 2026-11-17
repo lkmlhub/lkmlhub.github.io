@@ -1,12 +1,16 @@
-/* "Files changed" tab of a patch series: diffstat, file tree, one card per file with a unified diff.
+/* "Files changed" tab of a patch series: diffstat, file tree, one card per file with a unified or split diff.
  * Diff text arrives as plain unified hunks (first character = line type) and is turned into table rows
- * with createElement/textContent only. */
+ * with createElement/textContent only. The side by side pairing lives in diffpair.js (pure, tested with node). */
 (function () {
   'use strict';
   var LH = window.LH, h = LH.h;
   var HUNK = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@ ?(.*)$/;
   var EAGER_LINES = 2500;       // files are expanded until this many lines are on the page
   var VIEWED_PREFIX = 'lh-viewed:';
+  var LAYOUT_KEY = 'lkmlhub-diff-layout';
+  var CHUNK_ROWS = 2000;        // rows of one file part rendered at once, the rest comes with "Show more lines"
+  var WIDE_QUERY = '(min-width: 900px)';   // below this the split layout is not offered
+  var Pair = window.LHDiffPair;
 
   /* ---------------------------------------------------------------- pure helpers (no DOM) */
 
@@ -108,8 +112,52 @@
     };
   }
 
+  /* ---------------------------------------------------------------- layout preference */
+  function validLayout(v) { return v === 'split' || v === 'unified' ? v : null; }
+  function storedLayout() {
+    try { return validLayout(localStorage.getItem(LAYOUT_KEY)); } catch (e) { return null; }
+  }
+  function storeLayout(v) {
+    try { localStorage.setItem(LAYOUT_KEY, v); } catch (e) { /* storage may be blocked */ }
+  }
+
   /* ---------------------------------------------------------------- diff table */
-  function diffTable(part) {
+  /* The text of one line; the changed middle of a paired removed/added line gets its own span. */
+  function codeNodes(text, hl) {
+    if (!hl || hl[0] >= hl[1]) return text;
+    var out = [];
+    if (hl[0] > 0) out.push(text.slice(0, hl[0]));
+    out.push(h('span', { class: 'ih' }, text.slice(hl[0], hl[1])));
+    if (hl[1] < text.length) out.push(text.slice(hl[1]));
+    return out;
+  }
+
+  function unifiedRow(r) {
+    if (r.t === 'hunk' || r.t === 'note') {
+      return h('tr', { class: r.t === 'hunk' ? 'd-hunk' : 'd-note' }, h('td', { class: 'ln' }), h('td', { class: 'ln' }), h('td', { class: 'mk' }), h('td', { class: 'code' }, r.s));
+    }
+    return h('tr', { class: 'd-' + r.t },
+      h('td', { class: 'ln', 'data-n': r.o === undefined ? null : String(r.o) }),
+      h('td', { class: 'ln', 'data-n': r.n === undefined ? null : String(r.n) }),
+      h('td', { class: 'mk' }, r.t === 'add' ? '+' : r.t === 'del' ? '-' : ' '),
+      h('td', { class: 'code' }, codeNodes(r.s, r.hl)));
+  }
+
+  function splitCells(c, side) {
+    var ln = h('td', { class: 'ln sp-' + c.t + (side === 'r' ? ' sp-right' : ''), 'data-n': c.no === undefined || c.t === 'note' ? null : String(c.no) });
+    var code = h('td', { class: 'code sp-' + c.t }, c.t === 'empty' ? null : c.t === 'note' ? c.s : codeNodes(c.s, c.hl));
+    return [ln, code];
+  }
+
+  function splitRow(r) {
+    if (r.span) {
+      return h('tr', { class: r.left.t === 'hunk' ? 'd-hunk' : 'd-note' }, h('td', { class: 'ln' }), h('td', { class: 'code', colspan: '3' }, r.left.s));
+    }
+    return h('tr', { class: 'd-split' }, splitCells(r.left, 'l'), splitCells(r.right, 'r'));
+  }
+
+  /* layout is 'unified' or 'split'; the rows are added in chunks so a file with thousands of lines cannot freeze the page. */
+  function diffTable(part, layout) {
     var f = part.f;
     if (f.cb) return h('p', { class: 'diff-note muted' }, 'Combined (merge) diffs are not shown.');
     if (f.b && !f.x) return h('p', { class: 'diff-note muted' }, 'Binary file not shown.');
@@ -119,24 +167,30 @@
         f.m ? 'File mode changed from ' + f.m[0] + ' to ' + f.m[1] + '.' : 'No textual changes.';
       return h('p', { class: 'diff-note muted' }, why);
     }
+    var split = layout === 'split';
+    var lines = parseHunks(f.x);
+    var rows, make;
+    if (split) { rows = Pair.pairRows(lines); make = splitRow; }
+    else { Pair.markIntraline(lines); rows = lines; make = unifiedRow; }
     var tbody = h('tbody');
-    parseHunks(f.x).forEach(function (r) {
-      var tr;
-      if (r.t === 'hunk') {
-        tr = h('tr', { class: 'd-hunk' }, h('td', { class: 'ln' }), h('td', { class: 'ln' }), h('td', { class: 'mk' }), h('td', { class: 'code' }, r.s));
-      } else if (r.t === 'note') {
-        tr = h('tr', { class: 'd-note' }, h('td', { class: 'ln' }), h('td', { class: 'ln' }), h('td', { class: 'mk' }), h('td', { class: 'code' }, r.s));
-      } else {
-        tr = h('tr', { class: 'd-' + r.t },
-          h('td', { class: 'ln', 'data-n': r.o === undefined ? null : String(r.o) }),
-          h('td', { class: 'ln', 'data-n': r.n === undefined ? null : String(r.n) }),
-          h('td', { class: 'mk' }, r.t === 'add' ? '+' : r.t === 'del' ? '-' : ' '),
-          h('td', { class: 'code' }, r.s));
+    var table = h('table', { class: split ? 'diff-split' : 'diff-table', 'aria-label': (split ? 'Split' : 'Unified') + ' diff of ' + f.p }, tbody);
+    var scroll = h('div', { class: 'diff-scroll', tabindex: '0', role: 'region', 'aria-label': 'Diff of ' + f.p }, table);
+    var out = h('div', { class: 'diff-view' }, scroll);
+    var shown = 0, more = null;
+    function next() {
+      var stop = Math.min(rows.length, shown + CHUNK_ROWS);
+      var frag = document.createDocumentFragment();
+      for (; shown < stop; shown++) frag.appendChild(make(rows[shown]));
+      tbody.appendChild(frag);
+      if (more) { out.removeChild(more); more = null; }
+      if (shown < rows.length) {
+        var left = rows.length - shown, step = Math.min(left, CHUNK_ROWS);
+        more = h('div', { class: 'diff-more' }, h('button', { type: 'button', class: 'btn btn-small', onclick: function () { next(); } },
+          'Show ' + step + ' more lines'), left > step ? h('span', { class: 'muted small' }, ' ' + left + ' lines are not shown yet') : null);
+        out.insertBefore(more, scroll.nextSibling);
       }
-      tbody.appendChild(tr);
-    });
-    var table = h('table', { class: 'diff-table', 'aria-label': 'Unified diff of ' + part.f.p }, tbody);
-    var out = h('div', { class: 'diff-scroll', tabindex: '0', role: 'region', 'aria-label': 'Diff of ' + part.f.p }, table);
+    }
+    next();
     if (f.t) out.appendChild(h('p', { class: 'diff-note muted' }, 'The rest of this file is not shown, the patch was cut at LkmlHub\'s size limit.'));
     return out;
   }
@@ -195,6 +249,13 @@
     var entries, cards;
     var storeKey = list + '/' + n;
     var store = viewedStore(storeKey);
+    var urlLayout = validLayout(query.get('layout'));
+    var choice = urlLayout || storedLayout() || 'unified';   // the URL parameter wins over the stored preference
+    var explicit = urlLayout !== null;                       // a layout in the URL is kept in the links of this page
+    var curFile = query.get('file');
+    var mq = window.matchMedia ? window.matchMedia(WIDE_QUERY) : null;
+    function wide() { return !mq || mq.matches; }
+    function effective() { return wide() ? choice : 'unified'; }
 
     var summary = h('div', { class: 'files-summary' });
     var progress = h('span', { class: 'muted small', role: 'status' });
@@ -214,12 +275,17 @@
     });
     select.value = only === null ? 'all' : String(only);
 
-    function sync(file) {
+    function params(file) {
       var p = new URLSearchParams();
       p.set('tab', 'files');
       if (only !== null) p.set('patch', String(only));
       if (file) p.set('file', file);
-      history.replaceState(null, '', LH.threadHref(list, 'pr', n) + '?' + p.toString());
+      if (explicit) p.set('layout', choice);
+      return LH.threadHref(list, 'pr', n) + '?' + p.toString();
+    }
+    function sync(file) {
+      curFile = file || null;
+      history.replaceState(null, '', params(curFile));
     }
     function key(e) { return (only === null ? 'all' : only) + '|' + e.path; }
 
@@ -232,15 +298,19 @@
       c.toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       c.body.hidden = !open;
       c.section.classList.toggle('collapsed', !open);
-      if (open && !c.built) {
-        c.built = true;
-        c.entry.parts.forEach(function (part) {
-          if (c.entry.parts.length > 1 || (only === null && patches.length > 1)) {
-            c.body.appendChild(h('div', { class: 'diff-part' }, 'Patch ' + part.patch.i + '/' + total + ': ' + part.patch.t));
-          }
-          c.body.appendChild(diffTable(part));
-        });
-      }
+      if (open && !c.built) fill(c);
+    }
+
+    function fill(c) {
+      c.built = true;
+      LH.clear(c.body);
+      var layoutNow = effective();
+      c.entry.parts.forEach(function (part) {
+        if (c.entry.parts.length > 1 || (only === null && patches.length > 1)) {
+          c.body.appendChild(h('div', { class: 'diff-part' }, 'Patch ' + part.patch.i + '/' + total + ': ' + part.patch.t));
+        }
+        c.body.appendChild(diffTable(part, layoutNow));
+      });
     }
 
     function focusFile(c, push) {
@@ -271,15 +341,14 @@
       var toggle = h('button', { type: 'button', class: 'diff-toggle', 'aria-expanded': 'true', 'aria-controls': bodyId,
         'aria-label': 'Toggle diff of ' + e.path }, LH.icon('chevron'));
       var box = h('input', { type: 'checkbox', 'aria-label': 'Mark ' + e.path + ' as viewed' });
-      var link = h('a', { class: 'diff-name-link', href: LH.threadHref(list, 'pr', n) + '?tab=files&file=' + encodeURIComponent(e.path) +
-        (only !== null ? '&patch=' + only : ''), title: 'Link to this file' }, title);
+      var link = h('a', { class: 'diff-name-link', href: params(e.path), title: 'Link to this file' }, title);
       var section = h('section', { class: 'diff-file', id: 'diff-file-' + i, 'aria-label': e.path },
         h('header', { class: 'diff-file-head' }, toggle, h('span', { class: 'diff-name' }, link), badges,
           h('span', { class: 'spacer' }), counts(e.a, e.d), bars(e.a, e.d),
           h('label', { class: 'viewed' }, box, ' Viewed')));
       var body = h('div', { class: 'diff-body', id: bodyId });
       section.appendChild(body);
-      var c = { entry: e, section: section, body: body, toggle: toggle, box: box, built: false, treeLink: null };
+      var c = { entry: e, section: section, body: body, toggle: toggle, box: box, built: false, treeLink: null, link: link };
       toggle.addEventListener('click', function () { setOpen(c, c.body.hidden); });
       link.addEventListener('click', function (ev) { ev.preventDefault(); focusFile(c); });
       box.addEventListener('change', function () {
@@ -300,8 +369,7 @@
       });
       node.files.slice().sort(function (a, b) { return a.name < b.name ? -1 : 1; }).forEach(function (f) {
         var c = f.entry.card;
-        var a = h('a', { class: 'tree-file', href: LH.threadHref(list, 'pr', n) + '?tab=files&file=' + encodeURIComponent(f.entry.path) +
-          (only !== null ? '&patch=' + only : ''), title: f.entry.path },
+        var a = h('a', { class: 'tree-file', href: params(f.entry.path), title: f.entry.path },
           h('span', { class: 'tree-name' }, f.name), ' ', h('span', { class: 'tree-counts' }, h('span', { class: 'add' }, '+' + f.entry.a), ' ', h('span', { class: 'del' }, '-' + f.entry.d)));
         a.addEventListener('click', function (ev) { ev.preventDefault(); focusFile(c); });
         c.treeLink = a;
@@ -394,6 +462,63 @@
     }
     select.addEventListener('change', function () { choose(select.value); });
 
+    var segUnified = h('button', { type: 'button', class: 'seg-btn', 'aria-pressed': 'true' }, 'Unified');
+    var segSplit = h('button', { type: 'button', class: 'seg-btn', 'aria-pressed': 'false' }, 'Split');
+    var seg = h('span', { class: 'seg', role: 'group', 'aria-label': 'Diff layout' }, segUnified, segSplit);
+    var shownLayout = effective();
+
+    function paintSeg() {
+      var eff = effective();
+      segUnified.setAttribute('aria-pressed', eff === 'unified' ? 'true' : 'false');
+      segSplit.setAttribute('aria-pressed', eff === 'split' ? 'true' : 'false');
+      segUnified.disabled = segSplit.disabled = !wide();
+      seg.classList.toggle('is-disabled', !wide());
+      seg.title = wide() ? 'Show the diff in one column or side by side' :
+        'The split layout needs a window at least 900 px wide, the unified layout is shown';
+    }
+
+    /* Rebuild every card that is already on the page in the shown layout, keeping the card at the top of the window in place. */
+    function relayout() {
+      var now = effective();
+      if (now === shownLayout || !cards) return;
+      shownLayout = now;
+      var anchor = null, before = 0;
+      for (var i = 0; i < cards.length; i++) {
+        var r = cards[i].section.getBoundingClientRect();
+        if (r.bottom > 0) { anchor = cards[i]; before = r.top; break; }
+      }
+      cards.forEach(function (c) {
+        if (!c.built) return;
+        c.built = false;
+        LH.clear(c.body);
+        if (!c.body.hidden) fill(c);
+      });
+      if (anchor) window.scrollBy(0, anchor.section.getBoundingClientRect().top - before);
+    }
+
+    function pick(which) {
+      choice = which; explicit = true;
+      storeLayout(which);
+      paintSeg();
+      relayout();
+      cards.forEach(function (c) {
+        c.link.setAttribute('href', params(c.entry.path));
+        if (c.treeLink) c.treeLink.setAttribute('href', params(c.entry.path));
+      });
+      sync(curFile);
+    }
+    segUnified.addEventListener('click', function () { pick('unified'); });
+    segSplit.addEventListener('click', function () { pick('split'); });
+    if (mq && mq.addEventListener) {
+      var onWide = function () {
+        if (!wrap.isConnected) { mq.removeEventListener('change', onWide); return; }
+        paintSeg();
+        relayout();
+      };
+      mq.addEventListener('change', onWide);
+    }
+    paintSeg();
+
     function setTree(open) {
       treeBox.hidden = !open;
       layout.classList.toggle('no-tree', !open);
@@ -406,6 +531,7 @@
     var toolbar = h('div', { class: 'files-toolbar card' },
       summary, h('span', { class: 'spacer' }), progress,
       h('label', { class: 'version-picker' }, h('span', { class: 'sr-only' }, 'Patch'), select),
+      seg,
       h('button', { type: 'button', class: 'btn', onclick: function () { all(true); } }, 'Expand all'),
       h('button', { type: 'button', class: 'btn', onclick: function () { all(false); } }, 'Collapse all'),
       treeToggle);

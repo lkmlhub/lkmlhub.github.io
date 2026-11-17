@@ -118,6 +118,34 @@ class ContrastTests(unittest.TestCase):
                 if what != "ln":
                     self.assertGreaterEqual(ratio(t[kind], bg), 3.0, "%s: %s marker on its own background" % (theme, kind))
 
+    def test_split_layout_colours_are_readable(self):
+        """Split cells (.sp-add/.sp-del), the changed-characters span (.ih) and the empty placeholder, see style.css."""
+        css = (SITE / "assets/style.css").read_text()
+        cells = re.findall(r"\.diff-split \.sp-(add|del)\.(code|ln) \{ background: color-mix\(in srgb, var\(--(?:add|del)\) (\d+)%, var\(--bg\)\)", css)
+        self.assertEqual(len(cells), 4, cells)
+        marks = re.findall(r"\.diff-table \.d-(add|del) \.ih, \.diff-split \.sp-(?:add|del) \.ih \{ background: color-mix\(in srgb, var\(--(?:add|del)\) (\d+)%, var\(--bg\)\)", css)
+        self.assertEqual(len(marks), 2, marks)
+        self.assertIn(".diff-split .sp-empty { background-color: var(--bg-subtle);", css)
+
+        def mix(a, b, pct):
+            ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+            cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+            return "#%02x%02x%02x" % tuple(round(x * pct / 100 + y * (100 - pct) / 100) for x, y in zip(ca, cb))
+
+        for theme, t in self.themes.items():
+            for kind, what, pct in cells:
+                bg = mix(t[kind], t["bg"], int(pct))
+                self.assertGreaterEqual(ratio(t["fg"], bg), 4.5, "%s: fg on split %s %s" % (theme, kind, what))
+                if what == "code":
+                    self.assertGreaterEqual(ratio(t[kind], bg), 3.0, "%s: %s marker on its split cell" % (theme, kind))
+            for kind, pct in marks:
+                bg = mix(t[kind], t["bg"], int(pct))
+                self.assertGreaterEqual(ratio(t["fg"], bg), 4.5, "%s: fg on changed characters of %s" % (theme, kind))
+            # the placeholder carries no text, but its hatch must stay visible against the page background
+            self.assertGreaterEqual(ratio(t["border"], t["bg-subtle"]), 1.1, theme)
+            # the segmented switch: text of the pressed button
+            self.assertGreaterEqual(ratio(t["accent-fg"], t["accent-bg"]), 4.5, theme)
+
     def test_chip_text_on_page_background(self):
         for theme, t in self.themes.items():
             self.assertGreaterEqual(ratio(t["link"], t["bg"]), 4.5)
