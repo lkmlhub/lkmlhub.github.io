@@ -43,8 +43,8 @@ MAX_SITE_MB = 700  # GitHub Pages allows 1 GB; this keeps a safety margin
 # Estimates used to choose series before anything is written (gzip of the JSON, see scripts/estimate_size.py)
 GZ_DIFF = 0.27
 GZ_BODY = 0.30
-LIGHT_PER_ENTITY = 2600  # rows, detail, search, profile share of one thread
-FIXED_PER_LIST = 12000  # meta.json of a list: daily chart, contributors, events
+LIGHT_PER_ENTITY = 950  # thread detail (gzip), rows, search, profile share of one thread, measured 900
+FIXED_PER_LIST = 15000  # meta.json of a list: daily chart, contributors, events, measured 15.5 KB
 DIFF_BUDGET = None  # optional extra cap in bytes on diff and body files (tests, experiments)
 
 
@@ -258,13 +258,19 @@ def build_site(state, out, now, names=None, base="/", max_site_mb=MAX_SITE_MB, l
     for attempt in range(4):
         report = _build_once(state, out, now, names, base, log, save_numbers=(attempt == 0), max_entities=max_entities,
                              cap=cap, shrink=shrink, scale=scale, diff_budget=diff_budget)
-        if report["bytes"] <= cap:
+        ratio = report["heavy_bytes"] / report["est_heavy"] if report.get("est_heavy") and report.get("heavy_bytes") else 1.0
+        if report["bytes"] > cap:
+            over = report["bytes"] - cap
+            log("site is %.1f MB, over the %.0f MB cap: leaving out whole series (%.1f MB)" % (report["bytes"] / 1e6, max_site_mb, over / 1e6))
+            shrink += int(over * 1.1) + 1
+            scale *= max(0.5, min(2.0, ratio))
+        elif report["series_left_out"] and diff_budget is None and attempt < 2 and report["bytes"] < cap * 0.93:
+            # the estimate was too careful: series were left out although there is room, try again with the measured ratio
+            log("site is %.1f MB, %.0f MB below the cap with %d series left out: adjusting the estimate" % (
+                report["bytes"] / 1e6, (cap - report["bytes"]) / 1e6, report["series_left_out"]))
+            scale *= max(0.5, min(1.0, ratio))
+        else:
             break
-        over = report["bytes"] - cap
-        log("site is %.1f MB, over the %.0f MB cap: leaving out whole series (%.1f MB)" % (report["bytes"] / 1e6, max_site_mb, over / 1e6))
-        shrink += int(over * 1.1) + 1
-        if report.get("est_heavy") and report.get("heavy_bytes"):
-            scale *= max(0.5, min(2.0, report["heavy_bytes"] / report["est_heavy"]))
     report["over_cap"] = report["bytes"] > cap
     return report
 
