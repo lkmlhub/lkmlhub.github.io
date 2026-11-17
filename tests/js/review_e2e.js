@@ -279,6 +279,84 @@ async function flow(layout) {
   } finally { await c.close(); }
 }
 
+async function requestScenario() {
+  const c = await launch({ chrome, width: 1280, height: 900, tmp });
+  const p = c.page;
+  try {
+    await p.goto(base + '/index.html#/kexec/pr/1?tab=files', 'document.querySelectorAll(".diff-file").length > 3');
+    await p.eval('localStorage.clear()');
+    await p.reload('document.querySelectorAll(".diff-file").length > 3');
+    await addComment(p, KEYRING, { ix: 22 }, rv.comments[0].text);
+    await saveComment(p);
+    await openDialog(p);
+    await p.click('.rv-identity input[type=text]'); await p.typeLines(rv.reviewer.name);
+    await p.click('.rv-identity input[type=email]'); await p.typeLines(rv.reviewer.email);
+    const label = async (sel) => 'label[for="' + await p.eval('document.querySelector(' + JSON.stringify(sel) + ').id') + '"]';
+    // Request changes without text: only the line comment, no tag
+    await p.click(await label('.rv-state input[value=request]'));
+    await p.click('.rv-footer .btn-primary');
+    await p.waitFor('document.querySelectorAll(".rv-mail").length === 1', 'one reply, to patch 1');
+    let t = await p.eval('document.querySelector(".rv-eml").textContent');
+    assert.ok(t.includes('Subject: Re: [PATCH v2 1/3]') && !/-by:/.test(t), 'no tag unless Nacked-by is chosen');
+    await p.click('.rv-footer .btn:not(.btn-primary)');      // back to the review
+    await p.waitFor('document.querySelector(".rv-state")');
+    assert.strictEqual(await p.eval('document.querySelector(".rv-state input:checked").value'), 'request', 'the choice is kept');
+    // the explicit Nacked-by, for one patch only
+    await p.click(await label('.rv-nack input'));
+    assert.ok(await p.eval('!document.querySelector(".rv-scope").hidden'), 'a tag needs a scope');
+    await p.click(await label('.rv-scope input[value=patches]'));
+    assert.ok(await p.eval('!!document.querySelector(".rv-picks").offsetParent'), 'the patch list is shown');
+    await p.click('.rv-footer .btn-primary');       // no patch picked yet: the line comment alone still makes a valid review
+    await p.waitFor('document.querySelectorAll(".rv-mail").length === 1');
+    assert.ok(!/-by:/.test(await p.eval('document.querySelector(".rv-eml").textContent')), 'nobody picked, so no tag');
+    await p.click('.rv-footer .btn:not(.btn-primary)');
+    await p.waitFor('document.querySelector(".rv-picks")');
+    await p.click(await label('.rv-picks .rv-pick:nth-child(3) input'));    // patch 3
+    await p.click('.rv-footer .btn-primary');
+    await p.waitFor('document.querySelectorAll(".rv-mail").length === 2', 'patch 1 (comment) and patch 3 (tag)');
+    const mails = JSON.parse(await p.eval('JSON.stringify(Array.from(document.querySelectorAll(".rv-mail")).map(function(m){return [m.dataset.mail, m.querySelector(".rv-eml").textContent]}))'));
+    assert.deepStrictEqual(mails.map((m) => m[0]), ['patch-1', 'patch-3']);
+    assert.ok(!/-by:/.test(mails[0][1]), 'patch 1 has no tag');
+    assert.ok(mails[1][1].endsWith('Nacked-by: Jane Reviewer <jane@example.test>\n'), 'patch 3 has the Nacked-by');
+    assert.ok(!mails[1][1].includes('> diff'), 'a tag only reply quotes no diff');
+    assert.deepStrictEqual(p.errors, []);
+  } finally { await c.close(); }
+}
+
+async function messageScenario() {
+  const c = await launch({ chrome, width: 1280, height: 900, tmp });
+  const p = c.page;
+  try {
+    await p.goto(base + '/index.html#/kexec/pr/1?tab=files&patch=2', 'document.querySelectorAll(".diff-file").length > 0');
+    await p.eval('localStorage.clear()');
+    await p.reload('document.querySelector("details.rv-msg")');
+    await p.click('details.rv-msg summary');
+    await p.waitFor('document.querySelectorAll(".rv-msg-table .rv-add").length > 3', 'the commit message lines');
+    // line 5 of the message is "The BPF, dm-verity..." (index 4), the first line is "From: ..."
+    const text = await p.eval('Array.from(document.querySelectorAll(".rv-msg-table .code")).map(function(e){return e.textContent}).join("\\n")');
+    assert.ok(text.includes('This provides a direct interface'), 'the message is the stored body');
+    await p.click('.rv-msg-table .rv-add[data-ix="4"]');
+    await p.waitFor('document.querySelector(".rv-editor textarea")');
+    await p.typeLines('Please say which keyrings you mean.');
+    await saveComment(p);
+    assert.strictEqual(await p.eval('document.querySelector(".rv-badge").textContent'), '1');
+    await p.reload('document.querySelector("details.rv-msg")');
+    assert.ok(await p.eval('document.querySelector("details.rv-msg").open && !!document.querySelector(".rv-msg-table .rv-box")'), 'the comment survives a reload and its details stay open');
+    await openDialog(p);
+    assert.ok(await p.eval('document.querySelector(".rv-summary").textContent.indexOf("Commit message") > 0'));
+    await p.click('.rv-identity input[type=text]'); await p.typeLines(rv.reviewer.name);
+    await p.click('.rv-identity input[type=email]'); await p.typeLines(rv.reviewer.email);
+    await p.click('.rv-footer .btn-primary');
+    await p.waitFor('document.querySelectorAll(".rv-mail").length === 1');
+    const t = await p.eval('document.querySelector(".rv-eml").textContent');
+    assert.ok(t.includes('Subject: Re: [PATCH v2 2/3] keys: add KEY_SPEC_IPE_KEYRING'));
+    const body = t.split('\n\n').slice(1).join('\n\n');
+    assert.ok(body.includes('> The BPF, dm-verity, and fs-verity keyrings have well-known IDs which\n> allow userspace to directly address them. This commit follows the same\n> pattern for the .ipe keyring.\n\nPlease say which keyrings you mean.\n'), body);
+    assert.ok(!body.includes('> diff --git'), 'the diff is not quoted when only the message is commented on');
+    assert.deepStrictEqual(p.errors, []);
+  } finally { await c.close(); }
+}
+
 async function replyScenario() {
   const c = await launch({ chrome, width: 1280, height: 900, tmp });
   const p = c.page;
@@ -513,6 +591,8 @@ async function xss() {
   if (scenario === 'flow-unified') await flow('unified');
   else if (scenario === 'flow-split') await flow('split');
   else if (scenario === 'reply') await replyScenario();
+  else if (scenario === 'request') await requestScenario();
+  else if (scenario === 'message') await messageScenario();
   else if (scenario === 'mobile') await mobile();
   else if (scenario === 'nostorage') await nostorage();
   else if (scenario === 'xss') await xss();

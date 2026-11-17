@@ -50,7 +50,7 @@ def run_scenario(base, name, tmp, extra=""):
 
 @unittest.skipUnless(BROWSER and NODE, "no headless browser or node")
 class ReviewFlowTests(unittest.TestCase):
-    SCENARIOS = ["flow-unified", "flow-split", "reply", "mobile", "nostorage"]
+    SCENARIOS = ["flow-unified", "flow-split", "reply", "request", "message", "mobile", "nostorage"]
 
     @classmethod
     def setUpClass(cls):
@@ -82,6 +82,12 @@ class ReviewFlowTests(unittest.TestCase):
 
     def test_reply_composer_of_the_conversation_tab(self):
         self.check("reply")
+
+    def test_request_changes_with_an_explicit_nacked_by_for_one_patch(self):
+        self.check("request")
+
+    def test_comment_on_the_commit_message_quotes_it_in_the_reply(self):
+        self.check("message")
 
     def test_phone_layout_of_the_comment_box_and_the_dialogs(self):
         self.check("mobile")
