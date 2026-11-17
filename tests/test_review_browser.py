@@ -21,6 +21,17 @@ from .test_build import XssBuildTests
 
 BROWSER = shutil.which("google-chrome") or shutil.which("chromium")
 NODE = shutil.which("node")
+
+
+def node_major():
+    try:
+        return int(subprocess.run([NODE, "--version"], capture_output=True, text=True, timeout=20).stdout.strip().lstrip("v").split(".")[0])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 0
+
+
+if NODE and node_major() < 22:   # the DevTools client uses the built in WebSocket of node 22 and later
+    NODE = None
 E2E = Path(__file__).parent / "js" / "review_e2e.js"
 FIXTURES = Path(__file__).parent / "fixtures" / "review"
 

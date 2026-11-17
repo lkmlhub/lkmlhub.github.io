@@ -452,6 +452,9 @@ them, so they are kept in separate data used only by the reply feature:
   or a Reply button is opened (a test asserts that no page script mentions the path). About 57 bytes per message after gzip, counted
   as 80 in the size estimate. Message-IDs may contain addresses by nature, which is fine there.
 * Scan tests: addresses are allowed ONLY in these two kinds of files (`tests/helpers.is_address_file`), asserted both ways.
+* **Posting addresses.** Only `new.atom` has them, so a list that was fetched before the feature, whose archive has not changed since and
+  that has no posting address yet is fetched once more (one request per list, 359 once; `meta["lists"][<list>]["pa"]` records the
+  attempt, a feed without a `mailto:` id is not asked again).
 * **Learning.** Every message of every newly fetched feed (new.atom, search windows, thread feeds) adds its sender. Series shown
   before that have unknown addresses until their people post again, so the completion queue also schedules a thread feed fetch
   (one request) for displayed OPEN series with a participant without an address: per list queue `aq` in `meta.json` (item:

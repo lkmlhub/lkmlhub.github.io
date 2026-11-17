@@ -156,6 +156,41 @@ class AddressMapTests(unittest.TestCase):
         self.assertEqual({a for a in amap["a"].values()} <= {e["email"] for e in entries}, True)
 
 
+class ListAddressTests(unittest.TestCase):
+    def test_a_quiet_list_fetched_before_the_feature_is_asked_once_for_its_posting_address(self):
+        from lorehub.crawl import CacheSource, crawl
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        cache = Path(tmp.name) / "cache"
+        cache.mkdir()
+        shutil.copy(FIXTURES / "manifest.js.gz", cache / "manifest.js.gz")
+        shutil.copy(FIXTURES / "lkml.atom", cache / "lkml.atom")
+        st = State(Path(tmp.name) / "state")
+        s1 = crawl(st, CacheSource(cache), NOW, names=["lkml"], log=quiet)
+        self.assertEqual((s1["fetched"], s1["skipped"]), (1, 0))
+        s2 = crawl(st, CacheSource(cache), NOW + 60, names=["lkml"], log=quiet)
+        self.assertEqual((s2["fetched"], s2["skipped"]), (0, 1))     # nothing changed: skipped as before
+        # the state of a deployment from before the feature: fetched, no posting address, no attempt recorded
+        shutil.rmtree(st.root / "addrs")
+        meta = st.load_meta()
+        del meta["lists"]["lkml"]["pa"]
+        st.save_meta(meta)
+        s3 = crawl(st, CacheSource(cache), NOW + 120, names=["lkml"], log=quiet)
+        self.assertEqual((s3["fetched"], s3["skipped"]), (1, 0))
+        self.assertEqual(st.load_addrs("lkml")["post"], "user1@example.test")
+        s4 = crawl(st, CacheSource(cache), NOW + 180, names=["lkml"], log=quiet)
+        self.assertEqual((s4["fetched"], s4["skipped"]), (0, 1))
+        # a list whose feed has no address is asked once, not on every run
+        shutil.rmtree(st.root / "addrs")
+        (cache / "lkml.atom").write_text((FIXTURES / "lkml.atom").read_text().replace("<id>mailto:user1@example.test</id>", "<id>urn:uuid:1</id>"))
+        meta = st.load_meta()
+        del meta["lists"]["lkml"]["pa"]
+        st.save_meta(meta)
+        s5 = crawl(st, CacheSource(cache), NOW + 240, names=["lkml"], log=quiet)
+        s6 = crawl(st, CacheSource(cache), NOW + 300, names=["lkml"], log=quiet)
+        self.assertEqual((s5["fetched"], s6["fetched"], s6["skipped"]), (1, 0, 1))
+
+
 class ReplyShardTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -226,9 +261,20 @@ class ReplyShardTests(unittest.TestCase):
         self.assertTrue(allowed)
 
     def test_the_shard_is_never_fetched_by_a_page_view(self):
-        for name in ("thread.js", "files.js", "app.js", "list.js", "home.js", "people.js", "search.js", "rows.js", "util.js"):
-            src = (Path(__file__).resolve().parent.parent / "site/assets" / name).read_text()
-            self.assertNotIn("data/reply", src, name)
+        """Only review.js loads it, and only from session.shard(), which the review dialog and the Reply composer call (the
+        browser test also asserts that a Conversation or Files changed page view makes no request for it)."""
+        assets = Path(__file__).resolve().parent.parent / "site/assets"
+        for f in sorted(assets.glob("*.js")):
+            src = f.read_text()
+            if f.name != "review.js":
+                self.assertIsNone(re.search(r"get(?:Gz|JSON)\([^)]*reply", src), f.name)
+                self.assertNotIn(".shard(", src, f.name)
+        review = (assets / "review.js").read_text()
+        self.assertEqual(len(re.findall(r"data/reply/", review)), 1)
+        for m in re.finditer(r"session\.shard\(\)", review):
+            before = review[:m.start()]
+            self.assertTrue(before.rfind("function openReview") > before.rfind("function makeSession") or
+                            before.rfind("function openReply") > before.rfind("function openReview"))
 
     def test_the_site_reports_the_shard_in_its_size(self):
         self.assertGreater(self.report["bytes"], sum(p.stat().st_size for p in (self.out / "data/reply").rglob("*.gz")))

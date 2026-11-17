@@ -171,6 +171,13 @@ def ingest(state, name, entries, now, keep_bodies=True, data=None, retention_day
     return added, data
 
 
+def _post_known(state, name):
+    try:
+        return bool(state.load_addrs(name)["post"])
+    except StateError:
+        return False
+
+
 def feed_rate(entries):
     """Messages per day estimated from the time span of a feed page (0 when unknown)."""
     ts = sorted(e["ts"] for e in entries if e["ts"] > 0)
@@ -212,6 +219,8 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
     for name, info in lists.items():
         m = ml.setdefault(name, {})
         unchanged = manifest_ok and m.get("fetched") and m.get("mod") == info.modified and not m.get("err")
+        if unchanged and not m.get("pa") and not _post_known(state, name):
+            unchanged = False  # the posting address of the list is only in new.atom: ask once, even for a quiet list
         if unchanged:
             m["checked"] = now
             summary["skipped"] += 1
@@ -256,7 +265,7 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
             if ts and (before_seen == 0 or min(ts) > before_seen):
                 deep_candidates.append((max(ts) - min(ts), name, before_seen))
             m.update(
-                checked=now, fetched=now, mod=lists[name].modified, err="", n=len(data["msgs"]),
+                checked=now, fetched=now, mod=lists[name].modified, err="", n=len(data["msgs"]), pa=now,
                 etag=resp.headers.get("etag", ""), lm=resp.headers.get("last-modified", ""),
                 rt=feed_rate(entries),
             )

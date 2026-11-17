@@ -331,7 +331,7 @@ crawl, set `LOREHUB_BACKFILL_DAYS=0`, `LOREHUB_COMPLETE_REQUESTS=0` and `LOREHUB
 ## Tests
 
 ```sh
-python3 -m unittest            # about 350 tests, 30 to 90 s (headless Chrome tests included when a browser and node are installed)
+python3 -m unittest            # about 330 tests, 30 to 90 s (headless Chrome tests included when a browser and node are installed)
 for f in site/assets/*.js; do node --check "$f"; done
 ```
 
