@@ -193,7 +193,7 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
         try:
             resp = fut.result()
             entries = parse_feed(resp.body)[0] if resp.body else []
-        except FetchError as e:
+        except (FetchError, OSError, EOFError, ValueError) as e:
             summary["failed"] += 1
             log("  %-28s thread FAILED: %s" % (name, e))
             if getattr(e, "backoff", False):

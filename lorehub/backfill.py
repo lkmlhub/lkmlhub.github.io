@@ -150,7 +150,7 @@ def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time
         try:
             resp = fut.result()
             entries = parse_feed(resp.body)[0] if resp.body else []
-        except FetchError as e:
+        except (FetchError, OSError, EOFError, ValueError) as e:
             bf["err"] = str(e)[:160]
             summary["failed"] += 1
             log("  %-28s backfill FAILED: %s" % (name, e))

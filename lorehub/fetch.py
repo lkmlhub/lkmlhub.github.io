@@ -1,11 +1,13 @@
 """Polite HTTP client: rate limited, concurrency capped, honours Retry-After, backs off."""
 
 import gzip
+import http.client
 import random
 import threading
 import time
 import urllib.error
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 
@@ -32,13 +34,17 @@ def urllib_transport(url, headers, timeout=60):
     """Default transport: returns Response; never raises for HTTP status codes."""
     req = urllib.request.Request(url, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            status, hdrs, body = r.status, r.headers, r.read(MAX_BYTES + 1)
-    except urllib.error.HTTPError as e:
-        status, hdrs, body = e.code, e.headers, e.read(65536)
-    hdrs = {k.lower(): v for k, v in hdrs.items()}
-    if hdrs.get("content-encoding") == "gzip" and body:
-        body = gzip.decompress(body)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                status, hdrs, body = r.status, r.headers, r.read(MAX_BYTES + 1)
+        except urllib.error.HTTPError as e:
+            status, hdrs, body = e.code, e.headers, e.read(65536)
+        hdrs = {k.lower(): v for k, v in hdrs.items()}
+        if hdrs.get("content-encoding") == "gzip" and body:
+            body = gzip.decompress(body)
+    except (EOFError, zlib.error, http.client.HTTPException) as e:
+        # a truncated or garbled body (cut connection, short gzip stream): a retryable transport error
+        raise FetchError("incomplete response for %s: %s" % (url, e)) from e
     if len(body) > MAX_BYTES:
         raise FetchError("response too large")
     return Response(status, body, hdrs)
