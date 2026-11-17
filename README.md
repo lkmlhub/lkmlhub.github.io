@@ -17,6 +17,9 @@ A GitHub-style view of every mailing list archived on [lore.kernel.org](https://
 * conversations are **completed from lore's thread feeds**: series that look incomplete (a reply without its parent, a
   missing patch 3/7, a missing cover letter) are fetched whole, one request per series, from
   `https://lore.kernel.org/<list>/<message-id>/t.atom`. A series still waiting says "conversation still being completed"
+* **review by e-mail**: leave GitHub-style line comments on the diff, pick Approve, Comment or Request changes, and LkmlHub
+  prepares the plain text replies a kernel list expects, threaded and ready to send from your own mail client (see
+  [Reviewing by email](#reviewing-by-email)). It never sends anything.
 * **search** (`#/search?q=ipe keyring`) over titles, patch subjects, authors and lists, from a static index
 * a resumable **backfill** walks every list back **180 days**, so older series are found too
 
@@ -66,6 +69,105 @@ The toolbar of the Files changed tab has a **Unified | Split** switch like GitHu
 | --- | --- |
 | ![Unified](docs/screenshots/pr-files-light-desktop.png) | ![Split](docs/screenshots/pr-files-split-light-desktop.png) |
 
+## Reviewing by email
+
+The site is static, so it cannot send mail. Instead the Files changed tab is a review tool that prepares the e-mails.
+
+1. Open a series, go to **Files changed**, hover a line (added, removed or context, Unified or Split) and press **+**, or reach
+   it with the keyboard (Tab into the table, arrow keys between lines, Enter). Type the comment, **Add review comment**.
+   Comments are saved in your browser per list, series number and version, survive a reload, show as **Pending** and are
+   counted on the **Review changes** button. A single patch view also lets you comment on lines of the commit message.
+2. **Review changes** opens a dialog: your name and address (kept in this browser only, with a Forget me button), an overall
+   comment, **Approve** (a Reviewed-by, Acked-by or Tested-by tag, Reviewed-by by default, for the whole series or only for the
+   patches you pick), **Comment**, or **Request changes** (no tag, an explicit Nacked-by is offered but never preselected). The
+   dialog says: "Nothing is sent. Your drafts and identity stay in this browser."
+3. **Prepare e-mails** shows one panel per e-mail: one reply per patch with comments, one reply to the cover letter (overall
+   comment and series wide tag). For each: **Download .eml**, **Copy whole text**, **Open in mail app** (a `mailto:` link, only
+   when the text is short, about 1800 characters), **Copy git send-email command** and **Open on lore** (the message page with
+   the reply instructions). The comments become **Prepared**.
+4. The **Reply** button on every message of the Conversation tab opens a composer with the quoted message (attribution line, `> `
+   prefix) and the same output panel.
+
+What the e-mail looks like (the ipe series, patch 1 of v2, comments on two lines; `tests/fixtures/review/golden/patch-1.eml`):
+
+```
+From: Jane Reviewer <jane@example.test>
+To: Manuel Huber via B4 Relay <user1@example.test>
+Cc: kexec@lists.example.test, ..., Fan Wu <user20@example.test>
+Subject: Re: [PATCH v2 1/3] ipe: add the .ipe policy keyring
+In-Reply-To: <user45@example.test>
+References: <user44@example.test> <user45@example.test>
+Date: Tue, 17 Nov 2026 14:03:09 +0000
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-Unsent: 1
+
+On Thu, 29 Oct 2026 00:31:21 +0000, Manuel Huber via B4 Relay wrote:
+> diff --git a/security/ipe/keyring.c b/security/ipe/keyring.c
+> --- /dev/null
+> +++ b/security/ipe/keyring.c
+> @@ -0,0 +1,30 @@
+> +int __init ipe_keyring_init(void)
+> +{
+> +	ipe_keyring =
+> +		keyring_alloc(".ipe", GLOBAL_ROOT_UID, GLOBAL_ROOT_GID,
+
+Why not KEY_ALLOC_BUILT_IN here? The keyring is never freed.
+
+[...]
+
+> +				KEY_USR_SEARCH | KEY_USR_SETATTR,
+> ...
+```
+
+Kernel conventions followed: plain text, UTF-8, an attribution line, `> ` quoting, your comment unquoted right below the line it
+refers to between blank lines, `[...]` between quoted regions that are not adjacent, prose wrapped at 72 columns while quoted
+diff lines and code are never reflowed, tags on their own lines after your comment, no signature, `Re:` only once, `In-Reply-To`
+and a `References` chain built from the thread, `X-Unsent: 1` so that Outlook and Thunderbird open the `.eml` as a draft.
+Names and subjects are sanitised against header injection and non ASCII names are RFC 2047 encoded.
+
+**Limits.**
+
+* Nothing is sent; there is no way to send from the site. The e-mail is yours to check and send.
+* **To and Cc come only from people LkmlHub has seen in the thread** (the author of the message you reply to, the other
+  participants, the posting address of the lists the series went to). Maintainers who never replied are not added; add
+  them yourself (the message page on lore shows the usual reply-all recipients). If an address is not known, To is left empty and
+  the panel says so; the e-mail still has everything else.
+* **Address coverage grows over time.** Addresses are collected from the feeds since this feature exists; for older series the
+  thread completion fetches the thread of displayed open series (at most 100 requests per run) to learn them, so old or closed
+  series can miss addresses for a long time.
+* `mailto:` links hide above about 1800 characters and cannot set the sender; `git send-email` takes From, Subject and the text
+  from the saved file and the recipients from the command line (the command was written from the git documentation, git send-email
+  was not run in the development environment; try it with `--dry-run`).
+* Comments are on single lines, not ranges; the quoted diff is rebuilt from the stored hunks (no `index` lines, no diffstat).
+* Mail that was sent through the b4 web relay (a `devnull+...@kernel.org` sender) is replied to the real author when that person's
+  address is known, otherwise To stays empty.
+
+**Privacy: sender addresses.** The Atom feeds carry the sender address of every message. LkmlHub used to hash and drop them. Because
+reply-all needs them it now keeps the addresses of the people in a thread, the same ones lore.kernel.org already publishes, in
+separate files used only by this feature: `state/addrs/<list>.json.gz` on the data branch and `data/reply/<list>/<n>.json.gz` on
+the site (loaded only when you open the review dialog or a Reply button). They never appear on a page, in a message text, a diff,
+the thread data, the search index, a contributor page or a list page; the tests scan every other file for addresses. To opt out
+run with `--no-reply-addresses` or set the repository variable `LOREHUB_REPLY_ADDRESSES=off`: nothing is collected or published
+(stored addresses are deleted on the next run) and the reply e-mails get the list address plus a clear "add Cc" hint. Addresses
+can be removed on request. Your own name and address live only in your browser (`localStorage` key `lkmlhub-identity`).
+
+| Line comment (Unified, light) | Line comment (Split, dark) |
+| --- | --- |
+| ![Comment box, unified](docs/screenshots/review-comment-light-desktop.png) | ![Comment box, split, dark](docs/screenshots/review-comment-split-dark-desktop.png) |
+
+| Review dialog | Prepared e-mails |
+| --- | --- |
+| ![Review dialog](docs/screenshots/review-dialog-light-desktop.png) | ![Prepared e-mails](docs/screenshots/review-result-light-desktop.png) |
+
+| Reply composer (dark) | Review dialog (phone, dark) | Review dialog (dark) |
+| --- | --- | --- |
+| ![Reply composer](docs/screenshots/review-reply-dark-desktop.png) | ![Dialog on a phone](docs/screenshots/review-dialog-dark-mobile.png) | ![Review dialog, dark](docs/screenshots/review-dialog-dark-desktop.png) |
+
+The screenshots are made by `node scripts/review_shots.js` from the ipe fixture site (`python3 -m tests.ipe_fixture OUT`), a fresh
+Chrome profile per shot.
+
 ## Run it locally
 
 ```sh
@@ -89,6 +191,8 @@ Useful options:
 | crawl, all | `--backfill-list-pages 60` | pages of 200 entries per list, a safety cap (busy lists stop earlier, see below) |
 | crawl, all | `--max-diff-msgs 1000` | patch messages per list that keep a diff, whole series newest first |
 | crawl, all | `--complete-requests 300`, `--complete-min 8` | thread requests and minutes per run to complete incomplete series (0 = off) |
+| crawl, all, complete | `--complete-addr-requests 100` | of those requests, at most this many only to learn sender addresses of open series for the reply feature (0 = off, variable `LOREHUB_COMPLETE_ADDR_REQUESTS`) |
+| all commands | `--no-reply-addresses` | do not collect or publish sender addresses (also `LOREHUB_REPLY_ADDRESSES=off`), see Reviewing by email |
 | crawl, all | `--max-state-mb 650` | data branch budget, above it the per list patch limit is lowered (0 = off) |
 | complete | `--lists a,b --complete-requests 50` | run only the thread completion queue |
 | crawl, all | `--from-cache DIR`, `--save-raw DIR` | replay or record raw HTTP responses, for offline development |
@@ -147,9 +251,10 @@ Useful options:
   failed or partial run never shrinks or corrupts the stored state. A list that could not be refreshed
   keeps its previous state and is flagged stale on the site. One pass over all 359 lists took about 3
   minutes and 60 MB.
-* E-mail addresses are never stored or published. Authors are a salted, truncated SHA-256 of the
+* E-mail addresses are never part of the main state or of any page. Authors are a salted, truncated SHA-256 of the
   address (12 hex characters, used for avatars and contributor pages); bodies are scrubbed; message-ids
-  are stored percent-encoded.
+  are stored percent-encoded. The one exception is the reply feature (see Reviewing by email): the sender addresses of thread
+  participants, which lore already publishes, are kept in `state/addrs/` and published in `data/reply/` only, and that can be turned off.
 
 ## Heuristics
 
@@ -212,7 +317,7 @@ messages that are not replaced yet), series without a diff are simply not shown 
 page says that history is being rebuilt. The walk converges in about four runs and the thread completion in about five more.
 Optional repository variables: `LOREHUB_BACKFILL_DAYS` (default 180, 0 = off), `LOREHUB_BACKFILL_MINUTES` (6), `LOREHUB_BUDGET_MINUTES` (12), `LOREHUB_MIN_CYCLE_MINUTES` (10), `LOREHUB_CHAIN` (on), `LOREHUB_SQUASH_MB` (300),
 `LOREHUB_BACKFILL_TOTAL` (12000), `LOREHUB_BACKFILL_PAGES` (60), `LOREHUB_DEEP_BUDGET` (12), `LOREHUB_COMPLETE_REQUESTS` (200),
-`LOREHUB_MAX_SITE_MB` (700), `LOREHUB_MAX_STATE_MB` (650).
+`LOREHUB_MAX_SITE_MB` (700), `LOREHUB_MAX_STATE_MB` (650), `LOREHUB_COMPLETE_ADDR_REQUESTS` (100), `LOREHUB_REPLY_ADDRESSES` (on, `off` disables collecting and publishing sender addresses).
 
 **robots.txt:** `https://lore.kernel.org/robots.txt` currently disallows all crawlers (`User-agent: *`,
 `Disallow: /`). LkmlHub only fetches the manifest and the Atom feeds, which the service does serve, with
@@ -226,7 +331,7 @@ crawl, set `LOREHUB_BACKFILL_DAYS=0`, `LOREHUB_COMPLETE_REQUESTS=0` and `LOREHUB
 ## Tests
 
 ```sh
-python3 -m unittest            # about 270 tests, 20 to 60 s (headless Chrome tests included when a browser is installed)
+python3 -m unittest            # about 350 tests, 30 to 90 s (headless Chrome tests included when a browser and node are installed)
 for f in site/assets/*.js; do node --check "$f"; done
 ```
 
@@ -243,9 +348,13 @@ Files changed with diffs for all patches of both versions), the size estimate sc
 the Files changed tab (unified and split layout, the stored preference and the URL parameter, the phone fallback, a 5 000 line file), the pure pairing function of the split layout (node), hostile mail and diffs, subject parsing, trailers, status heuristics, version linking, threading, cross-post
 de-duplication, manifest and feed parsing, the polite fetcher (rate limit, Retry-After, backoff,
 concurrency), state merging, failed crawls leaving state untouched, a smoke test that builds
-the site from saved samples, no e-mail addresses in state, bodies, diffs, thread data or output (gzip files are unpacked for the
-scan), escaping of hostile mail text, a lint against HTML injection sinks and third-party
-origins, and a WCAG contrast check of every colour pair in both themes.
+the site from saved samples, no e-mail addresses in state, bodies, diffs, thread data or output except in the reply shards and the
+address map (gzip files are unpacked for the scan, asserted both ways), escaping of hostile mail text, a lint against HTML injection
+sinks and third-party origins, and a WCAG contrast check of every colour pair in both themes. The review feature has golden tests
+of the e-mails (node), a store test, pipeline tests (address map, reply shards, the address queue with a fake transport and clock,
+the opt out) and headless Chrome runs with real mouse and keyboard events through the DevTools protocol (`tests/js/cdp.js`):
+comments in both layouts, the dialog, the prepared e-mails against the golden files, download, reload, discard, the reply composer,
+a 390 px phone, a browser without localStorage and hostile input.
 
 ## Limitations
 
@@ -257,10 +366,12 @@ origins, and a WCAG contrast check of every colour pair in both themes.
   edited-subject reply is not noticed: 0 of 83 sampled threads, but it is not impossible). Completeness is per list archive.
   The busiest lists (`lkml`, `netdev`, ...) keep only their newest 1 000 patch messages, a day or two for `lkml`. Every list
   card says how far its history reaches, every search page links to the same query on lore.kernel.org.
+* **Reviewing by email has its own limits**, listed in [Reviewing by email](#reviewing-by-email) (To and Cc only from people seen, address
+  coverage grows over time, nothing is sent).
 * **Series without a stored diff are not shown.** That includes old series of busy lists, series evicted when the site would
   pass 700 MB (oldest closed ones first, whole series), series whose patches carry no parseable diff, and the series of a list
   that the walk has not reached yet after an update of the data format. Diffs are at most 120 KB per patch and 600 KB per series
-  (cut ones say so). Inline review comments are not attached to hunks (the Conversation tab shows the replies).
+  (cut ones say so). Inline review comments in the replies are not attached to hunks (the Conversation tab shows the replies); your own review comments are made in the Files changed tab.
 * **Limits.** Per list: the newest series with up to 1 000 patch messages with a diff (all their messages and bodies), 3 000 other
   messages, 100 published discussions. Expected size 540 MB data branch and 650 MB site (low 250 and 260, high 960 and 1170, where the
   caps (650 MB state budget, 700 MB site) trim whole series). Details in [docs/DESIGN.md](docs/DESIGN.md).
@@ -273,7 +384,7 @@ origins, and a WCAG contrast check of every colour pair in both themes.
 ## Layout
 
 ```
-lorehub/      generator: manifest, fetch, feed, parse, diff, diffshards, model, state, retention, migrate, crawl, backfill, complete, search, build, groups, CLI
+lorehub/      generator: manifest, fetch, feed, parse, diff, diffshards, model, state, retention, migrate, crawl, backfill, complete, reply, search, build, groups, CLI
 site/         static front end (index.html, assets/*.js, style.css)
 tests/        unittest suite and sanitised fixtures
 scripts/      estimate_size.py

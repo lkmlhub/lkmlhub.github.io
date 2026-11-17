@@ -75,3 +75,29 @@
 - v2 of the ipe series really has 6 replies; the 26 replies belong to v1, a separate thread on lore (32 across versions).
 - A reply whose parent is missing is not part of the series' thread in the model (it forms an entity of its own), so such gaps
   are found by matching its subject to the series' patches.
+
+## Follow-up 5: review by e-mail
+
+- [x] F1 sender addresses kept apart: `state/addrs/<list>.json.gz` (merge on ingest, pruned, atomic, deterministic), posting address from
+      the `new.atom` feed id, reply shards `data/reply/<list>/<n>.json.gz` for published threads, address scan tests allow exactly these
+      two kinds of files and assert both ways; no state epoch bump
+- [x] F2 opt out: `--no-reply-addresses` / `LOREHUB_REPLY_ADDRESSES=off` (no collecting, no publishing, stored addresses deleted)
+- [x] F3 thread completion queue also fetches the thread of displayed open series whose people have no address (cap 100 per run, once per
+      series, skipped when everybody became known meanwhile, cross-posts once)
+- [x] F4 `reviewmail.js`: pure e-mail generation (quoting, regions, `[...]`, wrapping, tags, headers, RFC 2047, References, Cc, mailto,
+      git send-email, .eml), golden tests from the ipe v2 series (patch 1, patch 3, cover), mapping, hostile input
+- [x] F5 `reviewstore.js` (drafts per list, number and version, identity, memory fallback), node tests
+- [x] F6 line comments in both layouts (+ on hover and focus, arrow keys, edit, delete, Pending/Prepared, badge, commit message lines),
+      review dialog (focus trap, aria-modal, Esc, tags and scope), result panels, Reply composer in the Conversation tab
+- [x] F7 headless Chrome through the DevTools protocol with real input (`tests/js/cdp.js`, `review_e2e.js`): both layouts, reload,
+      prepare, golden comparison, download, copy, discard, identity, reply, 390 px, no localStorage, hostile input
+- [x] F8 README "Reviewing by email", DESIGN, About page, screenshots (`scripts/review_shots.js`)
+
+## Findings along the way (follow-up 5)
+
+- Only `new.atom` carries the posting address of the list (`<id>mailto:...`); thread and search feeds have a `urn:uuid` id.
+- Headless Chrome reports `hover: none` and no pointer, so the hover rule of the + must not depend on `(hover: none)` alone; it uses
+  `(hover: none) and (pointer: coarse)`.
+- Mail sent through the b4 web relay comes from a `devnull+...@kernel.org` address that discards replies; the real author is the
+  Signed-off-by with the same name.
+- The size of a reply shard is about 57 bytes per message after gzip.

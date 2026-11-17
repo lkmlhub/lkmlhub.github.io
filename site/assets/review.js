@@ -338,12 +338,14 @@
     return t.length > 90 ? t.slice(0, 90) + '...' : t;
   }
 
-  function lineNumber(session, c) {
-    if (c.kind === 'msg') return c.ix + 1;
+  /* "line 14" or "removed line 12" for the list of comments. */
+  function lineLabel(session, c) {
+    if (c.kind === 'msg') return 'line ' + (c.ix + 1);
     var p = session.patch(c.patch);
     var f = p && session.diffs && session.diffs[p.mid] ? session.diffs[p.mid].f.filter(function (x) { return x.p === c.path; })[0] : null;
     var r = f && f.x && LH.filesTab ? LH.filesTab.parseHunks(f.x)[c.ix] : null;
-    return r ? (r.t === 'del' ? 'removed ' + r.o : r.n !== undefined ? r.n : '') : '';
+    if (!r) return 'a line';
+    return r.t === 'del' ? 'removed line ' + r.o : 'line ' + r.n;
   }
 
   function openReview(session, opener) {
@@ -439,9 +441,8 @@
         groups.forEach(function (g) {
           var items = h('ul', { class: 'rv-items' });
           g.items.sort(function (a, b) { return a.ix - b.ix; }).forEach(function (c) {
-            var num = lineNumber(session, c);
             var href = LH.threadHref(d.home, 'pr', d.n) + '?tab=files&patch=' + p.i + (c.kind === 'msg' ? '' : '&file=' + encodeURIComponent(c.path));
-            var link = h('a', { href: href, class: 'rv-jump' }, 'line ' + num);
+            var link = h('a', { href: href, class: 'rv-jump' }, lineLabel(session, c));
             link.addEventListener('click', function (ev) {
               if (!session.revealer) return;           // not on the Files changed tab: the link navigates there
               ev.preventDefault();

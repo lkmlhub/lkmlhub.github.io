@@ -58,6 +58,7 @@ records --> retention.py (whole series, newest first) --> state.py --> state/lis
 diffs   --> retention.py --> state.py --> state/diffs/<list>/<day>.json.gz          (diffs of the kept series, 1000 patch messages per list)
 state --> model.py (threads, revisions, series, status) --> build.py (shows only series with a diff) --> public/
 public/ = static HTML + JSON + gzip JSON + JS + CSS, rendered client side
+sender addresses --> state.py --> state/addrs/<list>.json.gz  --> reply.py --> public/data/reply/<list>/<n>.json.gz   (reply feature only)
 ```
 
 ### Crawling (crawl.py, feed.py)
@@ -381,6 +382,100 @@ boundary effects or patches that were sent to other lists only, and replies with
 (0 of about 1 000 messages). Extrapolation to 180 days: about 49 000 shown series (182 000 patches x 0.27), 3 % flagged (range 1.5 to 6 %)
 is **about 1 500 thread requests** in total (range 700 to 3 000), at 58 KB each (13 KB gzip on the wire) about 20 MB. At 300 per run
 that is 5 runs; in steady state only the new series of an hourly run are checked (a handful of requests).
+
+### Review by e-mail (reviewmail.js, reviewstore.js, review.js, reply.py, state/addrs)
+
+The site is static and cannot send mail, so the Files changed tab becomes a review tool that PREPARES the replies a kernel
+list expects. Nothing is sent, nothing leaves the browser.
+
+**Anchors.** A line comment names its line by `(patch message-id, file path, ix)` where `ix` is the index of the line in the
+file's stored hunk text (`x.split("\n")`, the `@@` line is ix 0). `parseHunks` gives every row its `ix` and `diffpair.js` keeps it on
+the cells, so the unified and the split layout name the same line the same way (a context line that shows on both sides of the
+split is one anchor). A comment also keeps the text of its line; if the stored diff no longer has that text the comment is left
+out of the e-mail with a warning. A comment on a commit message line is `kind: msg` with the line index of the stored message.
+Click-drag range comments are not implemented.
+
+**Drafts** are in `localStorage` under `lkmlhub-review:<list>:<number>:v<version>` (every version of a series is its own pull
+request with its own number, so comments are per version), the identity under `lkmlhub-identity`. Stored data is validated on
+read (types, sizes, at most 500 comments, unknown fields dropped). Without a usable localStorage the drafts live in memory until
+the page is reloaded and the page says so. A comment is "Pending" until the e-mails are prepared, then "Prepared" (an edit makes
+it pending again); "Discard review" clears everything of that version.
+
+**Email format decisions** (`reviewmail.js`, pure, golden tests in `tests/js/test_reviewmail.js`, golden files in
+`tests/fixtures/review/golden`):
+
+* One reply per patch that has line comments (or a picked tag), one reply to the cover letter when there is an overall comment or
+  a series wide tag, in the order patches, cover. A series without a cover letter puts the overall comment into the reply to
+  the first patch and cannot offer a series wide tag.
+* Body: attribution `On Thu, 29 Oct 2026 00:31:21 +0000, Name wrote:` (UTC, name only), then quoted regions and comments
+  separated by blank lines, then the overall comment and the tag lines. Quoting is `> ` + line, an empty line is `>` (no trailing
+  white space), already quoted text becomes `> > `. A commented diff line is quoted with up to 3 lines BEFORE it (never above its
+  hunk header), the comment follows; consecutive comments in one hunk continue the same quote, a gap gets a line `[...]`;
+  the three header lines of a file (`diff --git`, `---`, `+++`) and the hunk header are quoted once each; the commit message is
+  quoted only when it is commented on. The message is rebuilt from the stored pieces (commit message from the bodies shard,
+  hunk text from the diff shard): the `index` and mode lines and the diffstat are not stored and not quoted.
+* Prose is wrapped at 72 columns (counted in characters), short lines are never joined, quoted lines, indented code (4 spaces or a
+  tab) and long words such as URLs are never reflowed.
+* Tags: Approve gives Reviewed-by (default), Acked-by or Tested-by, Request changes none unless Nacked-by is ticked (never
+  preselected), Comment none. Scope: the whole series (the tag goes into the cover letter reply, which b4 applies to every patch)
+  or the picked patches (the tag goes into the reply to each). Name and address in the tag come from the identity.
+* Headers: From, To (author of the replied message), Cc (list addresses, then the other participants, each address once,
+  without the reviewer and without To), Subject (`Re: ` once), In-Reply-To, References (ancestors oldest first, then the replied
+  message, from the parent Message-IDs of the reply shard), Date (UTC), MIME-Version, Content-Type UTF-8, X-Unsent: 1.
+  Header values are one line: control characters, bidi overrides and line separators become spaces, display names are quoted or
+  RFC 2047 encoded (base64, words of at most 60 characters, folded at 78 columns), addresses and Message-IDs are checked
+  (anything that is not an addr-spec is dropped). To is omitted, not guessed, when the address is unknown.
+* Encoding: `Content-Transfer-Encoding: 8bit` and LF line ends, so that "Copy whole text" is readable and pastes cleanly;
+  quoted-printable only when a line is longer than 998 bytes (the SMTP limit), then for the whole email, with a warning.
+* Outputs: `.eml` (Blob, `message/rfc822`, object URL revoked when the dialog closes or after 10 s), copy, `mailto:` (RFC 6068: to,
+  cc, subject, In-Reply-To, body with CRLF; hidden above 1800 characters of URL, with a hint) and
+  `git send-email --from=... --in-reply-to='<id>' --no-thread --suppress-cc=all --8bit-encoding=UTF-8 --to=... --cc=... file.eml`.
+  From git-send-email(1): the file is read as a patch mail, most headers and the MIME formatting are ignored, so the recipients and
+  the message it answers come from the options; `--no-thread` keeps `--in-reply-to` for the one mail, `--suppress-cc=all` stops it
+  from adding people found in the text, `--from` avoids a second `From:` line inside the body. The man page is not installed on
+  the development machine; the command follows the online manual and was not run.
+* Mail sent through the b4 web endpoint comes from a `devnull+...@kernel.org` address that discards replies: the reply shard names
+  the real author (the Signed-off-by with the same name) when that person's address is known, and To is left empty with a warning
+  when it is not.
+
+**Addresses.** The Atom feeds carry the sender address of every message and the posting address of a list (`<id>mailto:...`,
+`new.atom` only: thread and search feeds have a `urn:uuid` id). They used to be hashed and dropped. Owner decision: reply-all needs
+them, so they are kept in separate data used only by the reply feature:
+
+* `state/addrs/<list>.json.gz` = `{"v": 1, "post": list address, "a": {author hash: sender address}}`, written atomically and
+  deterministically with the list (`State.sync_addrs`), merged on every ingest, pruned to the senders of the messages that are
+  stored. The main state files stay address free. The state epoch is NOT bumped: history ingested before the feature simply has no
+  addresses, nothing is re-walked.
+* `data/reply/<list>/<n>.json.gz` per published thread (series and discussions): `{"addr": 1|0, "lists": {list: posting
+  address}, "m": [{"i": Message-ID, "p": parent Message-ID, "n": name, "h": hash, "t": time, "s": subject, "ah": real author hash for
+  relay mail}], "who": {hash: {"n": name, "a": address}}}`, in the order of the bodies file. It is fetched only when the review dialog
+  or a Reply button is opened (a test asserts that no page script mentions the path). About 57 bytes per message after gzip, counted
+  as 80 in the size estimate. Message-IDs may contain addresses by nature, which is fine there.
+* Scan tests: addresses are allowed ONLY in these two kinds of files (`tests/helpers.is_address_file`), asserted both ways.
+* **Learning.** Every message of every newly fetched feed (new.atom, search windows, thread feeds) adds its sender. Series shown
+  before that have unknown addresses until their people post again, so the completion queue also schedules a thread feed fetch
+  (one request) for displayed OPEN series with a participant without an address: per list queue `aq` in `meta.json` (item:
+  first message-id, last activity, up to 6 hashes still missing, 1 when more), series already fetched for addresses are recorded in
+  `meta["lists"][<list>]["ad"]` and never fetched again, a run does at most `--complete-addr-requests` (default 100, variable
+  `LOREHUB_COMPLETE_ADDR_REQUESTS`) of its thread requests for this, after the real completion items, a cross-posted series is
+  fetched once, and an item is skipped without a request when everybody on it became known through other fetches in the meantime
+  (addresses are global per author hash). Series that are merged, superseded or stale are not scheduled.
+* **Opt out.** `--no-reply-addresses` or `LOREHUB_REPLY_ADDRESSES=off` (workflow variable): senders are neither collected nor
+  published, stored sender addresses are deleted at the next run (the list posting addresses stay: they are not personal), shards
+  are still written with `"addr": 0` and the list addresses, so the e-mails get the list in Cc and a hint to add the rest.
+* Request estimate for the deployed state: see REPORT5 in the run notes; in short up to the number of displayed open series
+  (an estimated 12 000 to 25 000 of 38 000 to 56 000 shown series, before the global learning removes the ones whose people are
+  known), 100 per run, so days at one run per hour.
+
+**Dialogs.** `review.js`: one modal helper (role=dialog, aria-modal, labelled, the rest of the page `inert`, Tab trapped, Esc and
+route changes close, focus returns to the opener), the review form (identity, overall comment, state, tag, scope, the list of
+comments with links that scroll to the line), the result panels (headers summary, warnings, buttons, the complete text), the
+Reply composer (the stored body quoted with an attribution; says so when the stored text is a shortened or cut copy or missing).
+All DOM through `createElement`/`textContent`.
+
+**Tests.** node golden tests (3 e-mails of the ipe v2 series: patch 1, patch 3, cover), mapping, wrapping, tags, threading, Cc,
+hostile input, quoted-printable, mailto, git send-email; store tests; pipeline tests (address map, shards, queue, opt out,
+relay); a headless Chrome flow with real input events through the DevTools protocol (`tests/js/cdp.js`), both layouts.
 
 ### Search index (search.py, searchcore.js)
 

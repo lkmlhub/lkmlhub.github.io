@@ -9,7 +9,7 @@ const path = require('path');
 const KEYS = {
   Enter: { code: 'Enter', vk: 13, text: '\r' }, Escape: { code: 'Escape', vk: 27 }, Tab: { code: 'Tab', vk: 9 },
   ArrowDown: { code: 'ArrowDown', vk: 40 }, ArrowUp: { code: 'ArrowUp', vk: 38 }, ArrowLeft: { code: 'ArrowLeft', vk: 37 },
-  ArrowRight: { code: 'ArrowRight', vk: 39 }, Space: { code: 'Space', vk: 32, text: ' ', key: ' ' }, Backspace: { code: 'Backspace', vk: 8 }
+  ArrowRight: { code: 'ArrowRight', vk: 39 }, End: { code: 'End', vk: 35 }, Space: { code: 'Space', vk: 32, text: ' ', key: ' ' }, Backspace: { code: 'Backspace', vk: 8 }
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
