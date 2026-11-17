@@ -66,9 +66,12 @@ function page(d) {
     return load('#/keyrings/pr/__K__');
   }).then(function (doc) {
     d = doc; R.v1 = page(d);
-    var det = d.querySelector('details.quote');
-    var btn = d.querySelector('button.show-full');
-    if (btn) { btn.click(); R.opened = d.querySelectorAll('details.quote[open]').length; R.btnText = btn.textContent; }
+    var det = d.querySelector('.mail-outer details.quote');
+    var outer = det.closest('.mail-outer');
+    var btn = outer.querySelector('button.show-full');
+    btn.click();
+    R.opened = outer.querySelectorAll('details.quote[open]').length;
+    R.btnText = btn.textContent;
     var link = d.querySelector('a.reply-ctx');
     R.ctxText = link ? link.textContent : '';
     return load('#/keyrings/pr/__K__?tab=commits');
