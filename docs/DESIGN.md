@@ -536,7 +536,7 @@ the versions with their reply counts, and a link to the thread on lore. A series
 note with a link to the whole thread.
 
 **Files changed tab (files.js).** Lazy loads `data/diffs/<list>/<n>.json.gz`, one collapsible card per file, unified or split (see below; line numbers from the `@@`
-headers, a table inside a horizontally scrolling box so wide lines never widen the page), a file tree that scrolls to the file, a "Viewed"
+headers; unified lines scroll inside the card and split lines wrap, so a long line never widens the page), a file tree that scrolls to the file, a "Viewed"
 box per file kept in `localStorage` (`lh-viewed:<list>/<n>`), a patch selector (all patches combined, or one patch with its commit
 message), a notice for patches without a stored diff ("Diffs for patches 4-7 are not stored, see lore") and banners for truncated
 diffs. The tab is always there for a series; its "no diff" empty state is defensive and unreachable in a normal build (a test
@@ -564,15 +564,34 @@ in the unified layout (its removed lines are paired with the added lines of the 
 
 *Responsive rule.* The split layout needs `min-width: 900px`. Below it the unified layout is rendered whatever the stored choice is, the
 two buttons are disabled with the title "The split layout needs a window at least 900 px wide, the unified layout is shown", and the
-stored choice stays untouched. A `matchMedia` listener re-renders the open cards when the window crosses the line. On a medium window
-(under 1100 px) the file tree starts hidden when Split is active, to give the table room.
+stored choice stays untouched. A `matchMedia` listener re-renders the open cards when the window crosses the line. The file tree starts
+hidden when Split is active and one half would be narrower than 450 px with the tree open (`halfWidth(true) < MIN_HALF` in files.js,
+about 1340 px of window width); the "Show file tree" button opens it anyway.
 
-*Rendering and width.* One `<table class="diff-split">` per file part with four cells per row (gutter, code, gutter, code), the `+` / `-`
-marker is a CSS `::before` (not copied with the text). Placeholders are hatched grey (`--bg-subtle` and `--border`). Colours are
-`color-mix` of `--add`, `--del` and `--bg`, checked for contrast in both themes (`tests/test_frontend.py`). The table is `width: 100%`
-with a `760px` minimum and `360px` minimum per code column, automatic table layout, inside the `.diff-scroll` box with `overflow-x: auto`:
-a long line widens its column, the card scrolls, the page never does. Binary, rename-only, mode-only and too-large files have no table, the
-note is a paragraph across the whole card, so it spans both columns in both layouts.
+*Page width.* thread.js puts the class `view-files` on `<body>` for the Files changed tab (app.js removes it on every route), and
+`.view-files .container` is `max-width: min(1600px, 96vw)` instead of 1280 px, so header, title, tabs, diff and footer stay aligned.
+At a 1400 px window the content is about 1310 px; with the 240 px tree open each half is about 475 px, with the tree closed about 600 px.
+
+*Rendering of the split table (GitHub's structure).* One `<table class="diff-split">` per file part with `table-layout: fixed` and a
+`<colgroup>` of four columns: number (50 px), code, number (50 px), code; the two `auto` code columns split the rest equally (the
+colgroup, not the first row, sets the widths, which matters because the first row is a spanning hunk header). Every ordinary row has
+exactly four cells `td.ln td.code td.ln td.code` (the number is `data-n` shown with `::before`, so it is not text), so both halves of a
+row always have the same height and a cell keeps its background for the full height. The right number cell carries the separator
+(`box-shadow: inset`, no border, so the code columns stay equal). Code cells are `position: relative; padding: 0 10px 0 24px;
+white-space: pre-wrap; overflow-wrap: anywhere`: breaks happen at spaces and hyphens first, inside a token only when it is longer
+than the cell. The `+` / `-` marker is an absolutely positioned `::before` in the left padding, so continuation lines start at the same
+edge as the first line (leading whitespace of a line stays part of that line, as on GitHub: a wrapped line is not indented under its
+indentation), and the marker is not copied. Font: monospace 12px on 20px lines, `tab-size: 4`. Hunk headers are one row, a gutter cell
+with a decorative expand icon (`unfold`, no function) and a `colspan=3` cell, bluish (`color-mix` of `--line` and `--bg`, 12 and 24
+percent), muted text. Empty placeholders are `--bg-subtle` with a hatch on the code cell. Colours are `color-mix` of `--add`, `--del`
+and `--bg` (so dark mode follows), checked for contrast in both themes (`tests/test_frontend.py`). Binary, rename-only, mode-only and
+too-large files have no table, the note is a paragraph across the whole card, so it spans both columns in both layouts.
+
+*Selection.* Number and marker cells are `user-select: none`. A `mousedown` on the table sets `sel-l` (press in the left half: the right
+code cells become unselectable) or `sel-r`, removed when the press is on a hunk header or a note, like GitHub's one sided selection.
+
+*File header.* `header.diff-file-head`, sticky at the top of the window above 860 px (static on a phone): collapse chevron, `+N -N` and
+the five squares, the path (monospace, wraps), badges, and the "Viewed" box at the right.
 
 *Performance rule.* Collapsed files are not rendered until opened and cards are expanded only until 2 500 lines are on the page (as before).
 Within a file part at most 2 000 rows (table rows, either layout) are created at once, then a "Show N more lines" button adds the next

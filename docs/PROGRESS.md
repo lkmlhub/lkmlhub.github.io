@@ -66,6 +66,19 @@
       3 000 character lines), XSS test extended with `layout=split` routes
 - [x] E7 screenshots of Files changed: unified and split, light and dark, desktop; unified on a phone; README and DESIGN updated
 
+## Follow-up 6: GitHub-like split diff
+
+- [x] F1 reproduced on the ipe fixture and a real 5 list sample (selinux, netdev, bpf, lkml, linux-mm) with headless Chrome at 1100, 1400
+      and 1700 px: unequal code columns (the spanning first row set the fixed layout), marker inside the wrapped text, 1280 px page
+      cap, 300 px tree
+- [x] F2 split table with a colgroup (50 px number columns, equal code columns), absolute `+` / `-` marker, tab size 4, pre-wrap, hunk
+      header row with expand icon and blue tint, number cells tinted on changed rows, hatched empty cells at full height
+- [x] F3 wide Files changed page (`view-files`, `min(1600px, 96vw)`), 240 px tree that starts collapsed under 450 px per half,
+      GitHub style sticky file header (chevron, counts and squares, path, Viewed), one sided selection
+- [x] F4 `tests/test_split_geometry_browser.py` (DOM measurements: column widths, row heights, marker, hanging edge of wrapped lines, tab,
+      long token, differing wrap counts, selection, hunk row, sticky, container and tree at 1100, 1400, 1700 px), hunk colour contrast
+- [x] F5 screenshots regenerated (ipe, kinds, a wrapping series; light and dark; unified phone), README, DESIGN
+
 ## Findings along the way (follow-up 3)
 
 - A new orphan commit per run re-sends the whole data branch (git cannot use the server's copy of unrelated history). The earlier claim

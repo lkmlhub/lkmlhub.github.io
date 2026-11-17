@@ -53,16 +53,25 @@ ipe series from linux-security-module and four lists it was cross-posted to (the
 The toolbar of the Files changed tab has a **Unified | Split** switch like GitHub's. It applies to every file card of the page at once.
 
 * **Unified**: one column, old and new line numbers side by side (the default).
-* **Split**: old on the left, new on the right, each side with its own line number gutter. Context lines show on both sides; in a
-  change block the removed lines go left and the added lines right, paired by position, and the shorter side gets hatched empty
-  cells without a number. Hunk headers span both columns, `\ No newline at end of file` stays on the side it belongs to. The
-  changed characters inside a paired removed/added line get a stronger background (in both layouts; lines over 500 characters and
-  pairs with nothing in common are left alone).
+* **Split**: laid out like GitHub's split view. Four columns per row: old number, old code, new number, new code. The two code
+  columns are equally wide and share all the width the 50 px number columns leave; numbers are muted and right aligned, with a red
+  tint on the number of a removed line and a green tint on an added one. Long lines wrap inside their cell (monospace 12px on 20px
+  lines, tab size 4, words are kept whole, a single token longer than the cell breaks anywhere), so there is no horizontal scrollbar.
+  The `+` / `-` marker is outside the text flow (absolutely positioned in the cell's left padding), so wrapped lines never run under
+  it and are not copied with the code. Both halves of a row are as tall as the taller one, and the shorter side keeps its colour (red,
+  green, or the hatched grey of an empty cell) for the full height. Context lines show on both sides; in a change block the removed
+  lines go left and the added lines right, paired by position. Hunk headers are a full width bluish row with a small expand icon in
+  the gutter, `\ No newline at end of file` stays on the side it belongs to. The changed characters inside a paired removed/added
+  line get a stronger background (in both layouts; lines over 500 characters and pairs with nothing in common are left alone).
+  Clicking in one half selects the code of that half only (numbers and markers are never selected).
+* **Wide page.** The Files changed tab uses a wider container (`min(1600px, 96vw)` instead of 1280 px), the file tree is 240 px
+  and starts collapsed when it would leave less than 450 px for each half (a window under about 1340 px); file headers are sticky
+  while a long file scrolls.
 * The choice is remembered in `localStorage` (`lkmlhub-diff-layout`) for all series. A link can carry it: `...?tab=files&layout=split`
   (the URL wins over the stored choice and does not overwrite it).
 * Below **900 px** window width only Unified is shown and the switch is disabled (with a tooltip saying why); the stored choice is
   kept and applies again on a wide screen.
-* Wide lines scroll inside the file card, never the page; the split table scrolls as a whole. A file renders its first 2 000 rows,
+* Wide unified lines scroll inside the file card, never the page (split lines wrap instead). A file renders its first 2 000 rows,
   "Show N more lines" adds the next chunk (both layouts); collapsed files are rendered only when opened.
 
 | Unified | Split |
@@ -167,6 +176,12 @@ can be removed on request. Your own name and address live only in your browser (
 
 The screenshots are made by `node scripts/review_shots.js` from the ipe fixture site (`python3 -m tests.ipe_fixture OUT`), a fresh
 Chrome profile per shot.
+
+Split with long, wrapping code lines (light and dark, real `selinux` series, 1400 px window):
+
+| Light | Dark |
+| --- | --- |
+| ![Split, wrapping lines](docs/screenshots/pr-files-split-wrap-light-desktop.png) | ![Split, wrapping lines, dark](docs/screenshots/pr-files-split-wrap-dark-desktop.png) |
 
 ## Run it locally
 
@@ -345,7 +360,7 @@ out, a partly migrated state builds a valid site), the backfill cursor (fake clo
 caps, failures, order), a real-data acceptance test on the ipe series (the reply counts equal the real thread: v1 26, v2 6;
 Files changed with diffs for all patches of both versions), the size estimate script, the search index and the pure query function
 (node), headless Chrome runs of the conversation (nesting, collapsed quotes, no overlap, no overflow at 1280 and 390 px) and of
-the Files changed tab (unified and split layout, the stored preference and the URL parameter, the phone fallback, a 5 000 line file), the pure pairing function of the split layout (node), hostile mail and diffs, subject parsing, trailers, status heuristics, version linking, threading, cross-post
+the Files changed tab (unified and split layout, the stored preference and the URL parameter, the phone fallback, a 5 000 line file, and the split geometry measured from the DOM: equal code columns, equal row heights, marker outside the text flow, wrapped lines, tab size, one very long token, wide container, tree that leaves room, sticky headers, one sided selection), the pure pairing function of the split layout (node), hostile mail and diffs, subject parsing, trailers, status heuristics, version linking, threading, cross-post
 de-duplication, manifest and feed parsing, the polite fetcher (rate limit, Retry-After, backoff,
 concurrency), state merging, failed crawls leaving state untouched, a smoke test that builds
 the site from saved samples, no e-mail addresses in state, bodies, diffs, thread data or output except in the reply shards and the
