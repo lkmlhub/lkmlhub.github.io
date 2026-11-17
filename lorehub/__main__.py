@@ -55,7 +55,7 @@ def add_build_args(p):
     p.add_argument("--out", default="public", help="output directory (default: public)")
     p.add_argument("--base", default="/", help="site base path, only used by 404.html (default /)")
     p.add_argument("--max-site-mb", type=float, default=300, help="site size cap in MB")
-    p.add_argument("--diff-budget-mb", type=float, default=80, help="published diff budget in MB")
+    p.add_argument("--diff-budget-mb", type=float, default=60, help="published diff budget in MB")
     p.add_argument("--now", type=int, help="override the current time (unix seconds)")
 
 

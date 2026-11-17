@@ -17,6 +17,7 @@
         h('a', { class: 'list-name', href: LH.route(l.n) }, l.n),
         status),
       h('p', { class: 'list-desc' }, l.d || 'No description'),
+      l.hs ? h('p', { class: 'history-note muted small', title: LH.historyNote(l.hs, l.hc).title }, LH.historyNote(l.hs, l.hc).text) : null,
       h('div', { class: 'list-card-foot' },
         h('span', { class: 'group', title: 'Subsystem group (guessed from the list name)' },
           h('span', { class: 'dot', style: 'background:' + LH.color(colors[l.g]) }), l.g),
@@ -93,6 +94,11 @@
       var t = data.totals;
       var notes = [];
       if (t.pending) notes.push(t.pending + ' lists have not been crawled yet and fill in over the next runs.');
+      var bfi = data.backfill;
+      if (bfi && bfi.days && bfi.done < bfi.lists) {
+        notes.push('History backfill: ' + bfi.done + ' of ' + bfi.lists + ' lists reach back ' + bfi.days + ' days (to ' + LH.shortDate(bfi.horizon) +
+          '), the rest fill in over the next runs. Busy lists stop at a page cap.');
+      }
       if (t.stale) notes.push(t.stale + ' lists could not be refreshed recently and may be out of date.');
 
       LH.clear(app).appendChild(h('div', { class: 'home' },

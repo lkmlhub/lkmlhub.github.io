@@ -34,7 +34,8 @@
         LH.extLink('https://lore.kernel.org/' + encodeURIComponent(name) + '/new.atom', 'Atom feed', 'btn'),
         LH.extLink('https://subspace.kernel.org/subscribing.html', 'Subscribe', 'btn'),
         h('span', { class: 'group' }, h('span', { class: 'dot', style: 'background:' + LH.color(meta.gc) }), meta.g),
-        h('span', { class: 'muted small' }, 'Last message ', LH.timeEl(meta.last))),
+        h('span', { class: 'muted small' }, 'Last message ', LH.timeEl(meta.last)),
+        meta.hs ? h('span', { class: 'muted small', title: LH.historyNote(meta.hs, meta.hc).title }, LH.historyNote(meta.hs, meta.hc).text) : null),
       banner,
       trimmed ? h('div', { class: 'banner' }, 'Showing the newest ' + (meta.counts.pr.open + meta.counts.pr.merged + meta.counts.pr.closed +
         meta.counts.issue.open + meta.counts.issue.closed) + ' of ' + meta.threads_total + ' threads to keep the site small.') : null);
@@ -215,6 +216,7 @@
         row('Messages collected', String(meta.msgs)),
         row('Threads known', String(meta.threads_total)),
         row('History kept', 'up to ' + meta.window_days + ' days'),
+        row('History reaches back to', meta.hs ? LH.shortDate(meta.hs) + ' (' + LH.historyNote(meta.hs, meta.hc).text.replace(/^history /, '') + ')' : 'unknown'),
         row('Last checked', meta.checked ? LH.timeEl(meta.checked) : 'never'),
         row('Crawl status', meta.crawl + (meta.err ? ' - ' + meta.err : '')))),
       h('p', null, 'Statuses are heuristics. ', h('a', { href: '#/about' }, 'Read how they are derived.')));

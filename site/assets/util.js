@@ -68,6 +68,19 @@
   LH.fullDate = function (ts) {
     return new Date(ts * 1000).toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC');
   };
+  LH.shortDate = function (ts) {
+    if (!ts) return 'unknown';
+    var d = new Date(ts * 1000);
+    var txt = d.toLocaleString('en', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+    return d.getUTCFullYear() === new Date().getUTCFullYear() ? txt : txt + ' ' + d.getUTCFullYear();
+  };
+  /* One line about how far back a list's history reaches. hc: 1 complete, 2 capped, 0 in progress, undefined no backfill. */
+  LH.historyNote = function (hs, hc) {
+    if (hc === 1) return { text: 'history back to ' + LH.shortDate(hs), title: 'The backfill finished: patch related mail is complete back to this date' };
+    if (hc === 2) return { text: 'history back to ' + LH.shortDate(hs) + ' (capped)', title: 'A busy list: the backfill stopped at its page cap, older mail is on lore' };
+    if (hc === 0) return { text: 'history back to ' + LH.shortDate(hs) + ', filling in', title: 'The backfill is still walking back in time over the next runs' };
+    return { text: 'history since ' + LH.shortDate(hs), title: 'The oldest message LoreHub holds for this list' };
+  };
   LH.timeEl = function (ts) {
     return LH.h('time', { datetime: new Date(ts * 1000).toISOString(), title: LH.fullDate(ts) }, LH.timeAgo(ts));
   };

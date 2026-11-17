@@ -7,6 +7,7 @@ import shutil
 import time
 from pathlib import Path
 
+from .backfill import history_start, horizon_ts, is_done
 from .crawl import manifest_from_json
 from .diffshards import SERIES_CAP, cap_series, est_size, pick
 from .feed import lore_url
@@ -34,7 +35,7 @@ MAX_AUTHOR_PROFILES = 4000
 MAX_ENTITIES = 300  # newest threads published per list
 SPARK_DAYS = 30
 STALE_AFTER = 6 * 3600
-DIFF_BUDGET = 80_000_000  # bytes of published diff JSON for the whole site
+DIFF_BUDGET = 60_000_000  # bytes of published diff JSON for the whole site (estimate_size.py: keeps the site near 280 MB)
 
 
 def pick_home(lists):
@@ -335,9 +336,10 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
         patch = m.subj.is_patch_message and not m.subj.is_cover
         review = any(t[0] in REVIEW_KINDS for t in m.tr) and not m.subj.is_patch_message
         for l in m.lists:
-            a = agg.setdefault(l, {"days": {}, "auth": {}, "last": 0, "msgs": 0, "m30": 0})
+            a = agg.setdefault(l, {"days": {}, "auth": {}, "last": 0, "first": m.t, "msgs": 0, "m30": 0})
             a["msgs"] += 1
             a["last"] = max(a["last"], m.t)
+            a["first"] = min(a["first"], m.t)
             di = (m.t - day0) // DAY
             if 0 <= di < RETENTION_DAYS:
                 d = a["days"].setdefault(di, [0, set()])
@@ -366,6 +368,10 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
             rows.setdefault(l, []).append(make_row(e, l))
             events_by_list.setdefault(l, []).extend(evs)
 
+    bfm = state.load_meta().get("backfill", {})
+    bf_days = bfm.get("days") or 0
+    hz = horizon_ts(now, bf_days) if bf_days else 0
+    bf_done = 0
     colors = group_colors()
     lists_json = []
     size_by_list = {}
@@ -403,21 +409,31 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
         else:
             crawl = "ok"
         group = group_for(name)
+        bf = st.get("bf") or {}
+        hc = None
+        if bf and bf_days:
+            hc = 1 if is_done(bf, hz) and not bf.get("cap") else 2 if bf.get("done") and bf.get("cap") else 0
+            bf_done += hc == 1
+        hs = (history_start(bf, hz) if bf and bf_days else 0) or (a["first"] if a else 0)
         last = (a["last"] if a else 0) or (info.modified if info else 0)
         lm = {
             "name": name, "desc": desc, "g": group, "gc": colors[group], "counts": counts, "labels": labels,
             "pages": pages, "pagesize": PAGE_SIZE, "daily": daily, "contributors": contributors,
             "events": ev, "crawl": crawl, "checked": st.get("checked", 0), "err": st.get("err", ""),
             "last": last, "msgs": a["msgs"] if a else 0, "threads_total": totals_by_list.get(name, 0),
-            "epochs": info.epochs if info else [], "window_days": RETENTION_DAYS,
+            "epochs": info.epochs if info else [], "window_days": RETENTION_DAYS, "hs": hs,
         }
+        if hc is not None:
+            lm["hc"] = hc
         sz += write("lists/%s/meta.json" % name, lm)
         size_by_list[name] = sz
         lists_json.append({
             "n": name, "d": desc, "g": group, "sp": daily["msgs"][-SPARK_DAYS:], "open": counts["pr"]["open"],
             "disc": counts["issue"]["open"], "la": last, "m30": a["m30"] if a else 0,
-            "st": crawl, "tot": a["msgs"] if a else 0,
+            "st": crawl, "tot": a["msgs"] if a else 0, "hs": hs,
         })
+        if hc is not None:
+            lists_json[-1]["hc"] = hc
 
     # diffs: one lazily loaded file per series, only fetched when the Files tab is opened
     diff_bytes = 0
@@ -471,6 +487,8 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
         "generated": now, "lists": lists_json, "groups": colors, "window_days": RETENTION_DAYS,
         "totals": {"lists": len(lists_json), "pending": pending, "stale": stale,
                    "messages": len(msgs), "threads": len(published)},
+        "backfill": {"days": bf_days, "horizon": hz, "done": bf_done, "lists": len(lists_json),
+                     "requests": bfm.get("requests", 0)},
     })
 
     _write_shell(tmp, SITE_DIR, lists_json, base, now)

@@ -371,13 +371,13 @@
     }
     select.addEventListener('change', function () { choose(select.value); });
 
-    treeToggle.addEventListener('click', function () {
-      var open = treeBox.hidden;
+    function setTree(open) {
       treeBox.hidden = !open;
       layout.classList.toggle('no-tree', !open);
       treeToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
       treeToggle.textContent = open ? 'Hide file tree' : 'Show file tree';
-    });
+    }
+    treeToggle.addEventListener('click', function () { setTree(treeBox.hidden); });
     function all(open) { cards.forEach(function (c) { setOpen(c, open); }); }
 
     var toolbar = h('div', { class: 'files-toolbar card' },
@@ -389,6 +389,7 @@
     wrap.appendChild(toolbar);
     wrap.appendChild(banners);
     wrap.appendChild(layout);
+    if (window.matchMedia && window.matchMedia('(max-width: 860px)').matches) setTree(false);
     render(query.get('file'));
   }
 })();

@@ -198,6 +198,7 @@ a.chip { color: var(--link); }
 .list-name { font-weight: 600; font-size: 16px; overflow-wrap: anywhere; }
 .list-desc { margin: 0; color: var(--fg-muted); flex: 1; overflow-wrap: anywhere; }
 .list-card-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; }
+.history-note { margin: 0; }
 .group { display: inline-flex; align-items: center; font-size: 12px; }
 .spark { display: block; }
 .spark-line { stroke: var(--line); stroke-width: 1.5; }
@@ -265,7 +266,8 @@ a.chip { color: var(--link); }
 .thread-head h1 { font-size: 26px; font-weight: 400; overflow-wrap: anywhere; }
 .num-title { font-weight: 300; }
 .thread-sub { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
-.version-picker { display: inline-flex; gap: 6px; align-items: center; }
+.version-picker { display: inline-flex; gap: 6px; align-items: center; max-width: 100%; min-width: 0; }
+.version-picker select { min-width: 0; max-width: 100%; flex: 1 1 auto; text-overflow: ellipsis; }
 .thread-layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; }
 .timeline { display: flex; flex-direction: column; gap: 16px; position: relative; }
 .comment { display: flex; gap: 12px; }
@@ -297,7 +299,8 @@ details.quote summary { cursor: pointer; color: var(--fg-muted); font-size: 12px
 /* files changed */
 .thread-wide { min-width: 0; }
 .files-toolbar { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; padding: 8px 12px; margin-bottom: 12px; }
-.files-toolbar select { max-width: 340px; }
+.files-toolbar .version-picker { flex: 0 1 340px; min-width: 0; max-width: 100%; }
+.files-toolbar select { width: 100%; min-width: 0; max-width: 100%; }
 .files-banners .banner { margin: 0 0 8px; }
 .files-layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 16px; align-items: start; }
 .files-layout.no-tree { grid-template-columns: minmax(0, 1fr); }
@@ -349,6 +352,7 @@ details.quote summary { cursor: pointer; color: var(--fg-muted); font-size: 12px
 .d-del .code, .d-del .mk { background: rgba(248, 81, 73, .15); }
 .d-add .ln { background: rgba(46, 160, 67, .3); }
 .d-del .ln { background: rgba(248, 81, 73, .3); }
+.d-add .ln, .d-del .ln { color: var(--fg); }
 .d-add .mk { color: var(--add); }
 .d-del .mk { color: var(--del); }
 @supports (background: color-mix(in srgb, red 10%, white)) {
@@ -367,6 +371,7 @@ details.quote summary { cursor: pointer; color: var(--fg-muted); font-size: 12px
 @media (max-width: 860px) {
   .home, .thread-layout, .files-layout { grid-template-columns: minmax(0, 1fr); }
   .files-tree { position: static; max-height: 40vh; }
+  .files-toolbar .version-picker { display: block; flex: 1 1 100%; }
   .diff-file-head { padding: 6px 8px; }
   .topbar-inner { height: auto; padding: 8px 16px; flex-wrap: wrap; gap: 8px; }
   .brand { flex: 1; }
@@ -383,3 +388,4 @@ details.quote summary { cursor: pointer; color: var(--fg-muted); font-size: 12px
 @media (prefers-reduced-motion: no-preference) {
   .btn, .tab, .row { transition: background-color .1s; }
 }
+.patch-head .mail { max-height: 20em; overflow: auto; }

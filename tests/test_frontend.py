@@ -100,6 +100,24 @@ class ContrastTests(unittest.TestCase):
             for c in ("open", "merged", "closed", "bar", "line"):
                 self.assertGreaterEqual(ratio(t[c], t["bg"]), 3.0, "%s: %s" % (theme, c))
 
+    def test_diff_colours_are_readable_on_added_and_removed_lines(self):
+        """The diff backgrounds are color-mix(var(--add|--del) N%, var(--bg)), see style.css."""
+        css = (SITE / "assets/style.css").read_text()
+        found = re.findall(r"\.d-(add|del) \.(code, \.d-\w+ \.mk|ln) \{ background: color-mix\(in srgb, var\(--(?:add|del)\) (\d+)%, var\(--bg\)\)", css)
+        self.assertEqual(len(found), 4, found)
+
+        def mix(a, b, pct):
+            ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+            cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+            return "#%02x%02x%02x" % tuple(round(x * pct / 100 + y * (100 - pct) / 100) for x, y in zip(ca, cb))
+
+        for theme, t in self.themes.items():
+            for kind, what, pct in found:
+                bg = mix(t[kind], t["bg"], int(pct))
+                self.assertGreaterEqual(ratio(t["fg"], bg), 4.5, "%s: fg on %s %s%% (%s)" % (theme, kind, pct, what))
+                if what != "ln":
+                    self.assertGreaterEqual(ratio(t[kind], bg), 3.0, "%s: %s marker on its own background" % (theme, kind))
+
     def test_chip_text_on_page_background(self):
         for theme, t in self.themes.items():
             self.assertGreaterEqual(ratio(t["link"], t["bg"]), 4.5)

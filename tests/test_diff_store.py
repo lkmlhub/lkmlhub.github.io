@@ -236,8 +236,8 @@ class BuildDiffTests(unittest.TestCase):
             found = found or "[email]" in t
         self.assertTrue(found)
 
-    def test_default_budget_is_80mb(self):
-        self.assertEqual(DIFF_BUDGET, 80_000_000)
+    def test_default_budget_is_60mb(self):
+        self.assertEqual(DIFF_BUDGET, 60_000_000)
 
     def test_extract_matches_state_roundtrip(self):
         d = extract_diff(patch_body("q.c", "1"))

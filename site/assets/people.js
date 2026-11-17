@@ -51,7 +51,7 @@
   LH.renderAbout = function (app) {
     LH.setTitle('About');
     return LH.getJSON('data/lists.json').then(function (data) {
-      var t = data.totals;
+      var t = data.totals, bf = data.backfill;
       var table = h('tbody');
       [['open', 'No reply from anyone other than the author yet.'],
         ['review', 'At least one reply from someone else.'],
@@ -71,8 +71,16 @@
           h('p', null, 'Right now it knows ' + t.lists + ' lists, ' + t.messages + ' messages and ' + t.threads + ' threads' +
             (t.pending ? ' (' + t.pending + ' lists are still waiting for their first crawl)' : '') + '.')),
         section('Data source',
-          h('p', null, 'Only lore.kernel.org. The list of lists is manifest.js.gz. Activity comes from each list\'s new.atom feed, which holds just the 25 newest messages, so LoreHub accumulates history across runs and keeps up to ' + data.window_days + ' days. Busy lists can optionally be topped up with the search Atom feed (up to 200 messages per request) within a small request budget. Message text is whatever the feed carries, trimmed; follow the "View on lore" links for the full message and the diff. Public-inbox git repositories are never cloned.'),
+          h('p', null, 'Only lore.kernel.org. The list of lists is manifest.js.gz. Fresh mail comes from each list\'s new.atom feed, which holds just the 25 newest messages, so LoreHub accumulates history across runs and keeps up to ' + data.window_days + ' days. Message text and patches are whatever the feeds carry (the feed holds the complete diff of a patch); bodies are trimmed, follow the "View on lore" links for the full message. Public-inbox git repositories are never cloned.'),
           h('p', null, 'Requests are polite: at most 2 at a time, at least half a second apart, Retry-After honoured, a descriptive User-Agent, and lists whose archive has not changed are skipped.')),
+        section('History and backfill',
+          h('p', null, bf && bf.days ? 'Besides the newest messages, LoreHub walks every list back in time through the search Atom of that list, down to a horizon of ' + bf.days + ' days (' + LH.shortDate(bf.horizon) + '). ' +
+            bf.done + ' of ' + bf.lists + ' lists are complete back to the horizon' + (bf.done < bf.lists ? ', the rest fill in over the next runs' : '') + '.' :
+            'The backfill has not started on this site yet.'),
+          h('p', null, 'Covered: patch series and pull requests and their review threads, found by the tags PATCH, RFC, PULL, RESEND and ANNOUNCE in the subject (replies keep the subject, "Re: [PATCH ...]"). Not covered: threads without those tags (for example plain bug reports older than the first crawl), replies whose subject was edited and lost the tag, mail older than the horizon, and the part of a very busy list beyond 25 search pages (5 000 messages) per list, which is why lkml and netdev reach back less far than small lists. Small lists are filled first. Each list card on the home page says how far its history reaches.'),
+          h('p', null, 'Freshness: a scheduled run every 30 minutes adds new mail (busy lists are swept through the search feed so they do not lose messages between runs). The footer shows when the data was generated. Anything missing here is one click away: every search page links to the same query on lore.kernel.org.')),
+        section('Files changed and search',
+          h('p', null, 'Every patch series has a "Files changed" tab with the unified diff of its patches, a file tree, a per-file "Viewed" box and a selector to read the combined diff or one patch at a time. Diffs are kept for the newest patches of each list (at most 120 KB per patch and 600 KB per series, within a site-wide size budget). When a diff is not stored the tab says so and links to lore. The search page (#/search) finds series and discussions by title, patch subject, author and list name with a static, sharded index; it works on prefixes and needs all words to match.')),
         section('How statuses are derived (heuristics)',
           h('p', null, 'These labels are guesses from reply text. They can be wrong: people review off-list, apply patches without replying, or write in unexpected ways. Priority runs from the top of this list to the bottom in the order Merged, Superseded, Changes requested, Reviewed, Acked, Tested, In review, Open, then Stale is applied on top.'),
           h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, table)),
@@ -80,7 +88,7 @@
         section('Update cadence',
           h('p', null, 'A scheduled GitHub Actions workflow runs every 30 minutes. Each run has a time budget and continues where the previous one stopped, so a freshly started site fills in over several runs. The footer shows when the data was generated. Lists that failed to refresh are marked stale.')),
         section('Privacy',
-          h('p', null, 'No cookies, no trackers, no third-party requests: fonts, icons and avatars are generated locally. E-mail addresses are never stored or shown. Contributors are identified by a salted hash of the address, which also drives the generated avatar. The only thing kept in your browser is the light or dark preference.')),
+          h('p', null, 'No cookies, no trackers, no third-party requests: fonts, icons and avatars are generated locally. E-mail addresses are never stored or shown. Contributors are identified by a salted hash of the address, which also drives the generated avatar. The only things kept in your browser are the light or dark preference and the Viewed marks of the Files changed tab. E-mail addresses inside diffs and commit messages are removed as well.')),
         section('Credits and related projects',
           h('p', null, 'All mail belongs to its authors and lives at ', LH.extLink('https://lore.kernel.org/', 'lore.kernel.org'),
             ', served by ', LH.extLink('https://public-inbox.org/', 'public-inbox'), '. Related tools that do other jobs: ',
