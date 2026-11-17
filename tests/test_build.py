@@ -299,13 +299,16 @@ class XssBuildTests(unittest.TestCase):
             routes = ["", "xss/patches", "xss/pr/%d" % row["n"], "xss/pr/%d?tab=commits" % row["n"], files_url,
                       files_url + "&patch=1", files_url + "&file=" + quote(hostile_file, safe=""),
                       files_url + "&file=" + quote(self.PAYLOADS[1], safe=""),
+                      files_url + "&layout=split", files_url + "&layout=split&patch=1",
+                      files_url + "&layout=split&file=" + quote(hostile_file, safe=""),
+                      files_url + "&layout=split&file=" + quote(self.PAYLOADS[1], safe=""),
                       "search?q=PWNED", "search?q=" + quote(self.PAYLOADS[2], safe=""),
                       "xss/contributors", "xss/activity", "xss/about", "u/" + author]
             for route in routes:
                 url = "http://127.0.0.1:%d/#/%s" % (port, route)
                 res = subprocess.run(
                     [browser, "--headless=new", "--no-sandbox", "--disable-gpu", "--virtual-time-budget=6000",
-                     "--dump-dom", url],
+                     "--window-size=1280,900", "--dump-dom", url],
                     capture_output=True, text=True, timeout=180)
                 dom = res.stdout
                 self.assertIn("LkmlHub", dom, route)
@@ -323,7 +326,14 @@ class XssBuildTests(unittest.TestCase):
                     self.assertIn("Search lore.kernel.org for this", dom, route)
                     self.assertIn("https://lore.kernel.org/all/?q=PWNED", dom, route)
                 if "tab=files" in route:
-                    self.assertIn('class="diff-table"', dom, route)
+                    if "layout=split" in route:   # a 1280 px window, so the split layout is really rendered
+                        self.assertIn('class="diff-split"', dom, route)
+                        self.assertNotIn('class="diff-table"', dom, route)
+                        self.assertIn('<td class="code sp-add">', dom, route)
+                        self.assertIn('<td class="code sp-del">', dom, route)
+                        self.assertIn('<td class="code sp-empty"></td>', dom, route)
+                    else:
+                        self.assertIn('class="diff-table"', dom, route)
                     self.assertIn("&lt;img src=x onerror=", dom, route)
                     self.assertNotIn("<img src=x", dom, route)
                     self.assertNotIn("\x1b", dom, route)

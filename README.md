@@ -7,8 +7,8 @@ A GitHub-style view of every mailing list archived on [lore.kernel.org](https://
 * a non-patch thread is a **discussion** (issue)
 * `Reviewed-by`, `Acked-by`, `Tested-by` and NAKs are **review states**
 * "Applied, thanks" replies and `[GIT PULL]` threads are **merges**
-* a pull request has the tabs **Conversation**, **Commits** and **Files changed**: the unified diff of the
-  series with a file tree, per-file cards and "Viewed" boxes, one patch at a time or all combined. **Only series with
+* a pull request has the tabs **Conversation**, **Commits** and **Files changed**: the diff of the
+  series (**Unified** or **Split**, see below) with a file tree, per-file cards and "Viewed" boxes, one patch at a time or all combined. **Only series with
   a stored diff are shown**, so "Files changed" is always there and always real (a series whose diff is not stored is
   not listed at all, in no count, feed, contributor page or search result)
 * the **Conversation** is the whole thread: cover letter, every patch and every reply with its complete text (quotes
@@ -44,6 +44,27 @@ More screenshots (light and dark, desktop and mobile, of the three tabs; list pa
 served under a sub-path) are in [docs/screenshots](docs/screenshots). They were taken with headless Chrome from
 real lore data: `lkml`, `netdev`, `linux-mm`, `bpf`, `linux-fsdevel`, `dri-devel`, `linux-riscv`, `stable`, and the
 ipe series from linux-security-module and four lists it was cross-posted to (the acceptance fixture).
+
+### Files changed: Unified and Split
+
+The toolbar of the Files changed tab has a **Unified | Split** switch like GitHub's. It applies to every file card of the page at once.
+
+* **Unified**: one column, old and new line numbers side by side (the default).
+* **Split**: old on the left, new on the right, each side with its own line number gutter. Context lines show on both sides; in a
+  change block the removed lines go left and the added lines right, paired by position, and the shorter side gets hatched empty
+  cells without a number. Hunk headers span both columns, `\ No newline at end of file` stays on the side it belongs to. The
+  changed characters inside a paired removed/added line get a stronger background (in both layouts; lines over 500 characters and
+  pairs with nothing in common are left alone).
+* The choice is remembered in `localStorage` (`lkmlhub-diff-layout`) for all series. A link can carry it: `...?tab=files&layout=split`
+  (the URL wins over the stored choice and does not overwrite it).
+* Below **900 px** window width only Unified is shown and the switch is disabled (with a tooltip saying why); the stored choice is
+  kept and applies again on a wide screen.
+* Wide lines scroll inside the file card, never the page; the split table scrolls as a whole. A file renders its first 2 000 rows,
+  "Show N more lines" adds the next chunk (both layouts); collapsed files are rendered only when opened.
+
+| Unified | Split |
+| --- | --- |
+| ![Unified](docs/screenshots/pr-files-light-desktop.png) | ![Split](docs/screenshots/pr-files-split-light-desktop.png) |
 
 ## Run it locally
 
@@ -219,7 +240,7 @@ out, a partly migrated state builds a valid site), the backfill cursor (fake clo
 caps, failures, order), a real-data acceptance test on the ipe series (the reply counts equal the real thread: v1 26, v2 6;
 Files changed with diffs for all patches of both versions), the size estimate script, the search index and the pure query function
 (node), headless Chrome runs of the conversation (nesting, collapsed quotes, no overlap, no overflow at 1280 and 390 px) and of
-the Files changed tab, hostile mail and diffs, subject parsing, trailers, status heuristics, version linking, threading, cross-post
+the Files changed tab (unified and split layout, the stored preference and the URL parameter, the phone fallback, a 5 000 line file), the pure pairing function of the split layout (node), hostile mail and diffs, subject parsing, trailers, status heuristics, version linking, threading, cross-post
 de-duplication, manifest and feed parsing, the polite fetcher (rate limit, Retry-After, backoff,
 concurrency), state merging, failed crawls leaving state untouched, a smoke test that builds
 the site from saved samples, no e-mail addresses in state, bodies, diffs, thread data or output (gzip files are unpacked for the

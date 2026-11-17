@@ -437,7 +437,7 @@ message count and the replies; the sidebar lists reviewers and trailers, labels,
 the versions with their reply counts, and a link to the thread on lore. A series that waits for its thread fetch shows a small muted
 note with a link to the whole thread.
 
-**Files changed tab (files.js).** Lazy loads `data/diffs/<list>/<n>.json.gz`, one collapsible card per file (line numbers from the `@@`
+**Files changed tab (files.js).** Lazy loads `data/diffs/<list>/<n>.json.gz`, one collapsible card per file, unified or split (see below; line numbers from the `@@`
 headers, a table inside a horizontally scrolling box so wide lines never widen the page), a file tree that scrolls to the file, a "Viewed"
 box per file kept in `localStorage` (`lh-viewed:<list>/<n>`), a patch selector (all patches combined, or one patch with its commit
 message), a notice for patches without a stored diff ("Diffs for patches 4-7 are not stored, see lore") and banners for truncated
@@ -445,6 +445,41 @@ diffs. The tab is always there for a series; its "no diff" empty state is defens
 asserts the DOM never shows it for the ipe series). Files of the first 2 500 lines are expanded, the others render when opened.
 The diff colours are `color-mix` of the theme variables `--add`, `--del` and `--bg` (checked for contrast in light and dark by a test).
 The version selector keeps the tab, each version has its own diff.
+
+**Unified and Split layout (files.js, diffpair.js).** A segmented control in the toolbar (two real buttons with `aria-pressed`) switches
+every file card at once. The choice is `choice = URL ?layout= (split|unified) || localStorage lkmlhub-diff-layout || unified`: the URL
+parameter wins and is never written to storage, a click writes storage and updates the URL (`history.replaceState`, also the file
+and tree links of the page) so the link opens the same layout. Invalid values are ignored.
+
+*Pairing (`LHDiffPair.pairRows`, pure, tested with node in `tests/js/test_diffpair.js`).* Input: the lines of `parseHunks` (`hunk`, `ctx`,
+`del`, `add`, `note`). Output: rows `{left, right}` with cells `{t: ctx|del|add|empty|note, no, s, hl}`, or `{span: true, left, right}`
+(same cell on both sides) for hunk headers. A context line is one row with both numbers. A change block is the run of `del` and `add` lines
+between context lines; its i-th removed line is paired with its i-th added line, the shorter side gets `{t: 'empty'}` cells (no number, no
+text). A `\ No newline` marker belongs to the line before it: after a removed line it sits on the left, after an added line on the right,
+after a context line on both sides; it follows the row of its line (never paired with an unrelated line); with nothing before it, it
+spans both columns. Notes in the data can never change the pairing of the lines around them.
+
+*Changed characters (`intraline`, `markIntraline`).* For each paired removed/added line the common prefix and suffix are trimmed and the
+middle gets `<span class="ih">` with a stronger background (40 percent of the add/del colour instead of 15). Skipped for identical lines,
+lines of more than 500 characters and pairs with no common prefix or suffix; never cuts inside a surrogate pair. The same marks are used
+in the unified layout (its removed lines are paired with the added lines of the same block in the same way).
+
+*Responsive rule.* The split layout needs `min-width: 900px`. Below it the unified layout is rendered whatever the stored choice is, the
+two buttons are disabled with the title "The split layout needs a window at least 900 px wide, the unified layout is shown", and the
+stored choice stays untouched. A `matchMedia` listener re-renders the open cards when the window crosses the line. On a medium window
+(under 1100 px) the file tree starts hidden when Split is active, to give the table room.
+
+*Rendering and width.* One `<table class="diff-split">` per file part with four cells per row (gutter, code, gutter, code), the `+` / `-`
+marker is a CSS `::before` (not copied with the text). Placeholders are hatched grey (`--bg-subtle` and `--border`). Colours are
+`color-mix` of `--add`, `--del` and `--bg`, checked for contrast in both themes (`tests/test_frontend.py`). The table is `width: 100%`
+with a `760px` minimum and `360px` minimum per code column, automatic table layout, inside the `.diff-scroll` box with `overflow-x: auto`:
+a long line widens its column, the card scrolls, the page never does. Binary, rename-only, mode-only and too-large files have no table, the
+note is a paragraph across the whole card, so it spans both columns in both layouts.
+
+*Performance rule.* Collapsed files are not rendered until opened and cards are expanded only until 2 500 lines are on the page (as before).
+Within a file part at most 2 000 rows (table rows, either layout) are created at once, then a "Show N more lines" button adds the next
+2 000. The patch cap (120 KB per patch, 600 KB per series) bounds the total. Switching layout rebuilds only the cards that are open and
+built, discards the DOM of collapsed ones, and keeps the card at the top of the window in place.
 
 Vanilla JS, no build step, no modules, no `innerHTML`: all nodes are created
 with `document.createElement`/`textContent` through one helper (`h()`), so mail

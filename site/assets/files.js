@@ -538,7 +538,9 @@
     wrap.appendChild(toolbar);
     wrap.appendChild(banners);
     wrap.appendChild(layout);
-    if (window.matchMedia && window.matchMedia('(max-width: 860px)').matches) setTree(false);
+    /* the tree starts hidden on a phone, and on a medium window when the split layout needs the room */
+    if (window.matchMedia && (window.matchMedia('(max-width: 860px)').matches ||
+        (effective() === 'split' && window.matchMedia('(max-width: 1099px)').matches))) setTree(false);
     render(query.get('file'));
   }
 })();

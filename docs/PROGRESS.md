@@ -51,6 +51,21 @@
 - [x] D7 polite as before: 2 concurrent requests, 0.5 s apart, Retry-After; 113 live requests in this task
 - [x] screenshots of the PR page (Conversation, Commits, Files changed; light and dark; desktop and phone) from the ipe fixture
 
+## Follow-up 4: Unified / Split diff layout
+
+- [x] E1 pure pairing module `site/assets/diffpair.js` (rows of `{left, right}`, no newline marker, intra-line marks), node tests
+      `tests/js/test_diffpair.js` (equal, more removed, more added, added only, removed only, interleaved, context only, marker,
+      empty hunk, hostile line, surrogate pairs)
+- [x] E2 segmented Unified | Split control (aria-pressed buttons), `localStorage` key `lkmlhub-diff-layout`, `?layout=` in the hash
+      route (wins over storage, never written to it), default Unified
+- [x] E3 split table: two gutters, hatched placeholders, spanning hunk headers, theme colours with contrast checks, horizontal
+      scroll inside the card, 900 px breakpoint with the switch disabled below it
+- [x] E4 changed characters highlight in both layouts (prefix and suffix trimmed, skipped over 500 characters or with nothing in common)
+- [x] E5 large files: 2 000 rows at a time with "Show N more lines" in both layouts
+- [x] E6 headless Chrome tests (`tests/test_diff_layout_browser.py`: ipe series at 1280, 900, 899 and 390 px, a 5 000 line file with
+      3 000 character lines), XSS test extended with `layout=split` routes
+- [x] E7 screenshots of Files changed: unified and split, light and dark, desktop; unified on a phone; README and DESIGN updated
+
 ## Findings along the way (follow-up 3)
 
 - A new orphan commit per run re-sends the whole data branch (git cannot use the server's copy of unrelated history). The earlier claim
