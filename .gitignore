@@ -3,3 +3,5 @@ __pycache__/
 /public/
 /state/
 /build-tmp/
+/state-*/
+/out-*/
