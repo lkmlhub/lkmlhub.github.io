@@ -44,6 +44,7 @@ MAX_SITE_MB = 700  # GitHub Pages allows 1 GB; this keeps a safety margin
 GZ_DIFF = 0.27
 GZ_BODY = 0.30
 LIGHT_PER_ENTITY = 2600  # rows, detail, search, profile share of one thread
+FIXED_PER_LIST = 12000  # meta.json of a list: daily chart, contributors, events
 DIFF_BUDGET = None  # optional extra cap in bytes on diff and body files (tests, experiments)
 
 
@@ -299,6 +300,11 @@ class DiffReader:
         return self.cache[key].get(m.mid)
 
 
+def site_bytes():
+    """Size of the static shell (index.html, scripts, styles) copied into every build."""
+    return sum(f.stat().st_size for f in SITE_DIR.rglob("*") if f.is_file())
+
+
 def est_series(e, have):
     """Estimated bytes on the site of a series: gzip of its diff shard and bodies file, plus the light JSON."""
     diff = est_size(sum(m.dz for m in have), len(have))
@@ -370,7 +376,7 @@ def _build_once(state, out, now, names, base, log, save_numbers=True, max_entiti
         keep_ids.update(list_keep[l])
     shown_disc = [e for e in discussions if id(e) in keep_ids]
     disc_cost = sum(LIGHT_PER_ENTITY + (sum(len(m.b) + 60 for m in e.members) * GZ_BODY) for e in shown_disc) * scale
-    budget = cap - 600_000 - int(disc_cost) - shrink
+    budget = cap - site_bytes() - FIXED_PER_LIST * len(listed) - int(disc_cost) - shrink
     if diff_budget is not None:
         budget = min(budget, diff_budget)
     chosen = pick(cands, max(0, budget))
