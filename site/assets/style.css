@@ -513,6 +513,7 @@ body.rv-modal-open { overflow: hidden; }
 @media (max-width: 860px) {
   .home, .thread-layout, .files-layout { grid-template-columns: minmax(0, 1fr); }
   .files-tree { position: static; max-height: 40vh; }
+  .diff-file-head { position: static; }
   .files-toolbar .version-picker { display: block; flex: 1 1 100%; }
   .diff-file-head { padding: 6px 8px; }
   .topbar-inner { height: auto; padding: 8px 16px; flex-wrap: wrap; gap: 8px; }

@@ -146,6 +146,25 @@ class ContrastTests(unittest.TestCase):
             # the segmented switch: text of the pressed button
             self.assertGreaterEqual(ratio(t["accent-fg"], t["accent-bg"]), 4.5, theme)
 
+    def test_hunk_header_and_gutter_colours_are_readable(self):
+        """The bluish hunk header row and its number gutter are color-mix(var(--line) N%, var(--bg)); muted text sits on them."""
+        css = (SITE / "assets/style.css").read_text()
+        found = dict(re.findall(r"tr\.d-hunk \.(code, tr\.d-hunk \.mk|ln) \{ background: color-mix\(in srgb, var\(--line\) (\d+)%, var\(--bg\)\)", css))
+        self.assertEqual(sorted(found), ["code, tr.d-hunk .mk", "ln"], found)
+
+        def mix(a, b, pct):
+            ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+            cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+            return "#%02x%02x%02x" % tuple(round(x * pct / 100 + y * (100 - pct) / 100) for x, y in zip(ca, cb))
+
+        for theme, t in self.themes.items():
+            bg = mix(t["line"], t["bg"], int(found["code, tr.d-hunk .mk"]))
+            self.assertGreaterEqual(ratio(t["fg-muted"], bg), 4.5, "%s: muted hunk header text" % theme)
+            # the gutter of a hunk row holds only the decorative expand icon, which should stay visible
+            self.assertGreaterEqual(ratio(t["fg-muted"], mix(t["line"], t["bg"], int(found["ln"]))), 3.0, theme)
+            # empty placeholder gutters and context numbers
+            self.assertGreaterEqual(ratio(t["fg-muted"], t["bg-subtle"]), 4.5, theme)
+
     def test_chip_text_on_page_background(self):
         for theme, t in self.themes.items():
             self.assertGreaterEqual(ratio(t["link"], t["bg"]), 4.5)

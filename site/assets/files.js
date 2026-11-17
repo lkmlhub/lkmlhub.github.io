@@ -182,8 +182,8 @@
     var td = ev.target && ev.target.closest ? ev.target.closest('td') : null, table = ev.currentTarget;
     if (!td || !td.parentNode || !td.parentNode.classList.contains('d-split')) { table.classList.remove('sel-l', 'sel-r'); return; }
     var right = td.cellIndex >= 2;
-    table.classList.toggle('sel-r', !right);
-    table.classList.toggle('sel-l', right);
+    table.classList.toggle('sel-l', !right);    // sel-l: only the left half can be selected
+    table.classList.toggle('sel-r', right);
   }
 
   function splitColumns() {
