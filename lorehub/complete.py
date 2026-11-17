@@ -39,11 +39,13 @@ LEGACY = "l"
 RETRY_AFTER = DAY  # a series whose thread was fetched is not fetched again within this time
 MAX_FETCHES = 3  # per series, after that the gaps are lore's
 MAX_QUEUE_PER_LIST = 500
+AD_KEEP = 4000  # per list: series whose address fetch is recorded in meta ("ad"), oldest are forgotten first
 
 
 @dataclass
 class Config:
     max_requests: int = 300  # thread requests per run
+    max_addr_requests: int = 100  # of them, at most this many only to learn sender addresses (see address_gap)
     budget_s: float = 480  # wall clock budget of one run
     commit_every: int = 40  # fetched threads between saves
 
@@ -115,27 +117,59 @@ def coverage(e, msgs, now, orphans=None):
     return (1 if due(e, now) else 2), gaps
 
 
-def scan_list(state, name, now, legacy=False, horizon=0):
-    """Queue items of one list: displayed series that look incomplete and are due for a thread fetch.
+def address_gap(e, known):
+    """True when a participant of series `e` has no stored sender address (`known`: set of author hashes with one)."""
+    return any(m.h and m.h not in known for m in e.members)
 
-    Item: [first message id, last activity, open (1/0), gap letters, patch count]. Trimmed bodies of an
-    older state format only count once the walk of the list is done (`legacy`): the walk replaces them.
+
+def scan_list_full(state, name, now, legacy=False, horizon=0, known=None, done=()):
+    """(completion items, address items) of one list.
+
+    Completion items are displayed series that look incomplete and are due for a thread fetch:
+    [first message id, last activity, open (1/0), gap letters, patch count]. Trimmed bodies of an older state format
+    only count once the walk of the list is done (`legacy`): the walk replaces them.
+
+    Address items ([first message id, last activity]) are displayed OPEN series with a participant whose sender
+    address is unknown (`known` is the set of author hashes with an address, None turns this off) and that were not
+    fetched for addresses before (`done`: first message ids recorded in meta). A thread fetch fills the address map
+    from the whole thread, one request per series.
     """
     data = state.load_list(name)
     series, mm = series_of(data, name)
     link_versions(series)
     orphans = orphan_keys(mm)
-    out = []
+    out, addr = [], []
     for e in series:
         if e.updated < horizon or not any("dz" in data["msgs"][m.mid] for m in e.patches):
             continue
         gaps = find_gaps(e, mm, legacy, orphans)
-        if not gaps or not due(e, now):
+        wants = known is not None and root_of(e).mid not in done and address_gap(e, known)
+        if not (gaps and due(e, now)) and not wants:
             continue
         compute_status(e, now)
-        out.append([root_of(e).mid, e.updated, int(e.state == "open"), gaps, len(e.patches)])
+        if gaps and due(e, now):
+            out.append([root_of(e).mid, e.updated, int(e.state == "open"), gaps, len(e.patches)])
+        elif wants and e.state == "open":
+            addr.append([root_of(e).mid, e.updated])
     out.sort(key=lambda x: (-x[2], -x[1], x[0]))
-    return out[:MAX_QUEUE_PER_LIST]
+    addr.sort(key=lambda x: (-x[1], x[0]))
+    return out[:MAX_QUEUE_PER_LIST], addr[:MAX_QUEUE_PER_LIST]
+
+
+def scan_list(state, name, now, legacy=False, horizon=0):
+    """Completion queue items of one list (see scan_list_full)."""
+    return scan_list_full(state, name, now, legacy, horizon)[0]
+
+
+def known_hashes(state, names):
+    """Author hashes that have a stored sender address in any list (hashes are global)."""
+    known = set()
+    for n in names:
+        try:
+            known.update(state.load_addrs(n)["a"])
+        except StateError:
+            pass
+    return known
 
 
 def mark_fetched(data, mid, now, added):
@@ -160,20 +194,37 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
     meta = state.load_meta()
     ml = meta.setdefault("lists", {})
     summary = {"touched": [], "requests": 0, "fetched": 0, "messages": 0, "failed": 0, "queue": 0, "left": 0,
-               "stopped": "", "scanned": 0}
+               "stopped": "", "scanned": 0, "addr_requests": 0, "addr_queue": 0, "addr_left": 0}
     horizon = now - days * DAY
     universe = [n for n in (names or state.list_names()) if n in set(state.list_names())]
     touched = set(touched or ())
+    addrs_on = bool(getattr(state, "reply_addresses", True))
+    known = known_hashes(state, state.list_names()) if addrs_on else None
+    done = {mid for m in ml.values() for mid in (m.get("ad") or {})}
     for name in universe:
         m = ml.setdefault(name, {})
-        if name in touched or "cq" not in m:
-            m["cq"] = scan_list(state, name, now, bool((m.get("bf") or {}).get("done")), horizon)
+        if name in touched or "cq" not in m or (addrs_on and "aq" not in m):
+            m["cq"], aq_items = scan_list_full(state, name, now, bool((m.get("bf") or {}).get("done")), horizon, known, done)
+            if addrs_on:
+                m["aq"] = aq_items
             summary["scanned"] += 1
+        elif not addrs_on:
+            m.pop("aq", None)
     queue = sorted(((it[2], it[1], name, it) for name in universe for it in ml[name].get("cq", [])),
                    key=lambda x: (-x[0], -x[1], x[2], x[3][0]))
     summary["queue"] = len(queue)
-    log("completion: %d series wait for their thread (%d lists scanned)" % (len(queue), summary["scanned"]))
-    queue = [(name, it) for _, _, name, it in queue]
+    seen_roots = {it[0] for _, _, _, it in queue}
+    aq = []
+    for name in universe:
+        for it in ml[name].get("aq", []):
+            if it[0] not in seen_roots and it[0] not in done:
+                seen_roots.add(it[0])
+                aq.append((-it[1], name, it))
+    aq.sort(key=lambda x: (x[0], x[1], x[2][0]))
+    summary["addr_queue"] = len(aq)
+    log("completion: %d series wait for their thread, %d open series wait for sender addresses (%d lists scanned)" % (
+        len(queue), len(aq), summary["scanned"]))
+    queue = [(name, it, "") for _, _, name, it in queue] + [(name, it, "a") for _, name, it in aq]
     open_lists = {}
     since_commit = 0
 
@@ -183,12 +234,18 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
         open_lists.clear()
         state.save_meta(meta)
 
-    def done_item(name, it):
-        cq = ml[name].get("cq", [])
-        if it in cq:
-            cq.remove(it)
+    def done_item(name, it, kind):
+        q = ml[name].get("aq" if kind else "cq", [])
+        if it in q:
+            q.remove(it)
+        if kind or addrs_on:
+            ad = ml[name].setdefault("ad", {})
+            ad[it[0]] = now
+            if len(ad) > AD_KEEP:
+                for k in sorted(ad, key=ad.get)[: len(ad) - AD_KEEP]:
+                    del ad[k]
 
-    def handle(name, it, fut):
+    def handle(name, it, kind, fut):
         nonlocal since_commit
         try:
             resp = fut.result()
@@ -207,7 +264,8 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
             if entries:
                 added, _ = ingest_all(state, name, entries, now, data)
                 summary["messages"] += added
-            mark_fetched(data, it[0], now, added)
+            if not kind:
+                mark_fetched(data, it[0], now, added)
         except StateError as e:
             summary["failed"] += 1
             log("  %-28s thread FAILED: %s" % (name, e))
@@ -215,7 +273,7 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
         if name not in summary["touched"]:
             summary["touched"].append(name)
         summary["fetched"] += 1
-        done_item(name, it)
+        done_item(name, it, kind)
         since_commit += 1
         if since_commit >= cfg.commit_every:
             commit()
@@ -229,20 +287,24 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
                     summary["stopped"] = "time budget"
                 elif summary["requests"] >= cfg.max_requests:
                     summary["stopped"] = "per run request cap"
+                elif queue[0][2] and summary["addr_requests"] >= cfg.max_addr_requests:
+                    summary["stopped"] = "per run cap for address requests"
                 else:
-                    name, it = queue.pop(0)
+                    name, it, kind = queue.pop(0)
                     summary["requests"] += 1
-                    pending[pool.submit(source.thread_atom, name, it[0])] = (name, it)
+                    summary["addr_requests"] += 1 if kind else 0
+                    pending[pool.submit(source.thread_atom, name, it[0])] = (name, it, kind)
                     continue
                 break
             if not pending:
                 break
             done, _ = wait(list(pending), return_when=FIRST_COMPLETED)
             for fut in done:
-                name, it = pending.pop(fut)
-                handle(name, it, fut)
+                name, it, kind = pending.pop(fut)
+                handle(name, it, kind, fut)
     commit()
     summary["left"] = sum(len(ml[n].get("cq", [])) for n in universe)
+    summary["addr_left"] = sum(len(ml[n].get("aq", [])) for n in universe)
     log("completion summary: %s" % {k: v for k, v in summary.items() if k != "touched"})
     return summary
 

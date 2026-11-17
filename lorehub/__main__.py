@@ -1,6 +1,7 @@
 """Command line: python3 -m lorehub {crawl,build,all}."""
 
 import argparse
+import os
 import sys
 import time
 
@@ -24,6 +25,23 @@ def split_lists(value):
 def add_common(p):
     p.add_argument("--state", default="state", help="state directory (default: state)")
     p.add_argument("--lists", help="comma separated list names (default: all)")
+    p.add_argument("--no-reply-addresses", action="store_true",
+                   help="do not collect or publish sender addresses for the reply e-mails of the review feature "
+                        "(also: environment LOREHUB_REPLY_ADDRESSES=off)")
+
+
+def reply_addresses_on(args):
+    """Sender addresses for the reply feature are on unless --no-reply-addresses or LOREHUB_REPLY_ADDRESSES=off."""
+    env = os.environ.get("LOREHUB_REPLY_ADDRESSES", "").strip().lower()
+    return not getattr(args, "no_reply_addresses", False) and env not in ("off", "0", "false", "no")
+
+
+def open_state(args):
+    state = State(args.state)
+    state.reply_addresses = reply_addresses_on(args)
+    if not state.reply_addresses:
+        state.drop_sender_addrs()
+    return state
 
 
 def add_backfill_args(p, default_days=180):
@@ -61,6 +79,9 @@ def add_crawl_args(p):
     p.add_argument("--complete-requests", type=int, default=300,
                    help="max thread requests per run to complete the conversation of incomplete series (0 = off)")
     p.add_argument("--complete-min", type=float, default=8, help="thread completion time budget per run in minutes")
+    p.add_argument("--complete-addr-requests", type=int, default=100,
+                   help="of the thread requests, at most this many per run only to learn the sender addresses of open "
+                        "series for the reply feature (default 100, 0 = off)")
     add_backfill_args(p)
     p.add_argument("--from-cache", help="replay raw feeds saved by --save-raw instead of fetching")
     p.add_argument("--save-raw", help="save raw HTTP responses into this directory")
@@ -75,7 +96,7 @@ def add_build_args(p):
 
 
 def run_crawl(args):
-    state = State(args.state)
+    state = open_state(args)
     limits = limits_of(args, state)
     now = int(time.time())
     started = time.monotonic()
@@ -104,7 +125,8 @@ def run_crawl(args):
         touched = set(summary.get("touched", [])) | set(summary.get("backfill", {}).get("touched", []))
         if budget >= 30:
             summary["completion"] = run_completion(
-                state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=budget),
+                state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=budget,
+                                           max_addr_requests=args.complete_addr_requests),
                 names=split_lists(args.lists), touched=touched, log=log, limits=limits, days=args.backfill_days)
         else:
             log("thread completion skipped: the run used the whole time budget")
@@ -116,7 +138,7 @@ def run_crawl(args):
 
 
 def run_backfill(args):
-    state = State(args.state)
+    state = open_state(args)
     source = CacheSource(args.from_cache) if args.from_cache else LiveSource(Fetcher(), args.save_raw)
     names = split_lists(args.lists)
     if args.backfill_days <= 0:
@@ -127,21 +149,22 @@ def run_backfill(args):
 
 
 def run_complete(args):
-    state = State(args.state)
+    state = open_state(args)
     source = CacheSource(args.from_cache) if args.from_cache else LiveSource(Fetcher(), args.save_raw)
     now = int(time.time())
-    return run_completion(state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=args.complete_min * 60),
+    return run_completion(state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=args.complete_min * 60,
+                                                    max_addr_requests=args.complete_addr_requests),
                           names=split_lists(args.lists), touched=None, log=log, limits=limits_of(args, state), days=args.backfill_days)
 
 
 def run_build(args):
     from .build import build_site
 
-    state = State(args.state)
+    state = open_state(args)
     now = args.now or int(time.time())
     report = build_site(
         state, args.out, now, names=split_lists(args.lists), base=args.base,
-        max_site_mb=args.max_site_mb, log=log,
+        max_site_mb=args.max_site_mb, log=log, reply_addresses=state.reply_addresses,
     )
     log("built %s: %d lists, %.1f MB" % (args.out, report["lists"], report["bytes"] / 1e6))
     return report
@@ -164,6 +187,8 @@ def main(argv=None):
     add_common(p)
     p.add_argument("--complete-requests", type=int, default=300, help="max thread requests in this run")
     p.add_argument("--complete-min", type=float, default=8, help="time budget in minutes")
+    p.add_argument("--complete-addr-requests", type=int, default=100,
+                   help="of the thread requests, at most this many only to learn sender addresses (default 100)")
     add_backfill_args(p)
     p.add_argument("--from-cache", help="replay raw responses saved by --save-raw")
     p.add_argument("--save-raw", help="save raw HTTP responses into this directory")

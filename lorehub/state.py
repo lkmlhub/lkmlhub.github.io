@@ -85,8 +85,9 @@ class State:
         return data
 
     def save_list(self, name, data):
-        """Write the messages of a list (one file per UTC day) and the diffs stashed by ingest."""
+        """Write the messages of a list (one file per UTC day), the diffs and the addresses stashed by ingest."""
         self.sync_diffs(name, data)
+        self.sync_addrs(name, data)
         days = {}
         for mid, rec in data["msgs"].items():
             day = time.strftime("%Y-%m-%d", time.gmtime(rec["t"]))
@@ -167,6 +168,69 @@ class State:
     def diff_bytes(self):
         d = self.root / "diffs"
         return sum(p.stat().st_size for p in d.rglob("*.json.gz")) if d.is_dir() else 0
+
+    # ---- reply addresses: one gzip JSON file per list, state/addrs/<list>.json.gz, used ONLY by the reply feature.
+    # {"v": 1, "post": posting address of the list, "a": {author hash: sender address}}. Nothing else in the state, in
+    # the bodies, the diffs or the site data carries an address (tests scan for it).
+
+    reply_addresses = True  # False: sender addresses are neither collected nor kept (--no-reply-addresses)
+
+    def addr_path(self, name):
+        return self.root / "addrs" / (name + ".json.gz")
+
+    def load_addrs(self, name):
+        path = self.addr_path(name)
+        empty = {"post": "", "a": {}}
+        if not path.exists():
+            return empty
+        try:
+            obj = json.loads(gzip.decompress(path.read_bytes()).decode("utf-8"))
+            post, amap = obj.get("post", ""), obj.get("a", {})
+            if not isinstance(post, str) or not isinstance(amap, dict):
+                raise TypeError("bad shape")
+            return {"post": post, "a": {str(k): str(v) for k, v in amap.items()}}
+        except (OSError, EOFError, ValueError, TypeError, AttributeError) as e:
+            raise StateError("corrupt address map for %s: %s" % (name, e))
+
+    def save_addrs(self, name, post, amap):
+        path = self.addr_path(name)
+        if not post and not amap:
+            if path.exists():
+                path.unlink()
+            return
+        blob = gzip_bytes(dumps({"v": 1, "post": post, "a": amap}))
+        if not path.exists() or path.read_bytes() != blob:
+            atomic_write(path, blob)
+
+    def drop_sender_addrs(self):
+        """Remove every stored sender address (opt out); the posting addresses of the lists stay."""
+        d = self.root / "addrs"
+        for path in sorted(d.glob("*.json.gz")) if d.is_dir() else []:
+            name = path.name[: -len(".json.gz")]
+            try:
+                cur = self.load_addrs(name)
+            except StateError:
+                path.unlink()
+                continue
+            if cur["a"]:
+                self.save_addrs(name, cur["post"], {})
+
+    def sync_addrs(self, name, data):
+        """Merge the addresses stashed by ingest (data["_addrs"], data["_post"]) into the list's address map and keep
+        only the senders of the messages that are stored. The list address is kept as long as the list has state."""
+        new = data.pop("_addrs", None) or {}
+        post = data.pop("_post", "") or ""
+        if not self.addr_path(name).exists() and not new and not post:
+            return
+        cur = self.load_addrs(name)
+        amap = dict(cur["a"])
+        if self.reply_addresses:
+            amap.update(new)
+            keep = {r["h"] for r in data["msgs"].values()}
+            amap = {h: a for h, a in amap.items() if h in keep}
+        else:
+            amap = {}
+        self.save_addrs(name, post or cur["post"], amap)
 
     def snapshot(self, name):
         return {p.name: p.read_bytes() for p in self.segments(name)}

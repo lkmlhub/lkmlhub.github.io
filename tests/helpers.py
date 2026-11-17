@@ -89,9 +89,19 @@ def jload(path):
     return json.loads(raw_bytes.decode("utf-8"))
 
 
-def site_texts(out):
-    """Every text file of a built site as (path, decoded text), gzip files decoded."""
+def is_address_file(path):
+    """The only files allowed to hold e-mail addresses: the reply shards of the site (data/reply/...) and the address
+    map of the state (addrs/<list>.json.gz). Everything else is scanned for addresses by the privacy tests."""
+    parts = Path(path).parts
+    return "addrs" in parts or ("reply" in parts and "data" in parts)
+
+
+def site_texts(out, with_addresses=False):
+    """Every text file of a built site as (path, decoded text), gzip files decoded. The files that may hold addresses
+    (see is_address_file) are left out unless `with_addresses`."""
     for p in sorted(Path(out).rglob("*")):
+        if not with_addresses and is_address_file(p):
+            continue
         if p.is_file() and p.suffix in (".json", ".gz", ".html", ".js", ".css"):
             b = p.read_bytes()
             yield p, (gzip.decompress(b) if b[:2] == b"\x1f\x8b" else b).decode("utf-8", "replace")
@@ -109,5 +119,5 @@ def diff_shard(out, home, n):
     return jload(Path(out) / ("data/diffs/%s/%d.json.gz" % (home, n)))["p"]
 
 
-__all__ = ["patch_body", "raw", "make_state", "load", "NOW", "FIXTURES", "mid_from_href", "jload", "site_texts", "thread_detail",
+__all__ = ["is_address_file", "patch_body", "raw", "make_state", "load", "NOW", "FIXTURES", "mid_from_href", "jload", "site_texts", "thread_detail",
            "thread_bodies", "diff_shard"]

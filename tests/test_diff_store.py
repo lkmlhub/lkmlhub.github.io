@@ -13,7 +13,7 @@ from lorehub.feed import to_record
 from lorehub.retention import Limits, finalize_list
 from lorehub.state import MAX_DIFF_MSGS, State, day_of, merge_records, stash_diffs
 
-from .helpers import NOW, jload, make_state, raw, thread_detail
+from .helpers import NOW, is_address_file, jload, make_state, raw, thread_detail
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 quiet = lambda m: None  # noqa: E731
@@ -232,7 +232,8 @@ class BuildDiffTests(unittest.TestCase):
         body = body.replace("+new line x", "+M:\tNew Person <new.person@corp.example.org>\n+R: plain@example.test")
         body = body.replace("@@ -1,2 +1,3 @@", "@@ -1,2 +1,4 @@")
         st, out, _ = self.build([raw("m1", "[PATCH] maintainers", body=body)])
-        files = list(out.rglob("*.json")) + list(out.rglob("*.gz")) + list(st.root.rglob("*.gz"))
+        files = [p for p in list(out.rglob("*.json")) + list(out.rglob("*.gz")) + list(st.root.rglob("*.gz"))
+                 if not is_address_file(p)]
         found = False
         for p in files:
             t = gzip.decompress(p.read_bytes()).decode() if p.suffix == ".gz" else p.read_text()

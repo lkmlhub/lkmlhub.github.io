@@ -15,7 +15,7 @@ import unittest
 from lorehub.feed import parse_feed
 
 from . import ipe_fixture
-from .helpers import FIXTURES, diff_shard, jload, site_texts, thread_bodies
+from .helpers import FIXTURES, diff_shard, is_address_file, jload, site_texts, thread_bodies
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 LISTS = ["kexec", "keyrings", "linux-doc", "linux-security-module", "lkml"]
@@ -172,7 +172,8 @@ class IpeAcceptanceTests(unittest.TestCase):
             seen += p.name.endswith(".json.gz")
         self.assertGreater(seen, 10)
         for p in self.state.root.rglob("*.gz"):
-            self.assertFalse(EMAIL.search(gzip.decompress(p.read_bytes()).decode()), p)
+            if not is_address_file(p):
+                self.assertFalse(EMAIL.search(gzip.decompress(p.read_bytes()).decode()), p)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from . import LORE
-from .feed import parse_feed, to_record
+from .feed import list_address, parse_feed, sender_address, to_record
 from .fetch import FetchError
 from .manifest import ListInfo, parse_manifest
 from .migrate import migrate
@@ -162,6 +162,12 @@ def ingest(state, name, entries, now, keep_bodies=True, data=None, retention_day
     records = {e["mid"]: to_record(e, keep_bodies, diffs) for e in entries}
     added = merge_records(data, records, now, retention_days)
     stash_diffs(data, diffs)
+    if getattr(state, "reply_addresses", True):
+        stash = data.setdefault("_addrs", {})
+        for e in entries:
+            got = sender_address(e)
+            if got:
+                stash[got[0]] = got[1]
     return added, data
 
 
@@ -243,6 +249,7 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
             data = state.load_list(name)
             before_seen = data.get("last_seen", 0)
             added, data = ingest(state, name, entries, now, keep_bodies, data, limits.retention_days)
+            data["_post"] = list_address(resp.body)
             finalize_list(state, name, data, now, limits)
             summary["touched"].append(name)
             ts = [e["ts"] for e in entries if e["ts"] > 0]

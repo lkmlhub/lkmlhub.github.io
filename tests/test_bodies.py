@@ -13,7 +13,7 @@ from lorehub.parse import MAX_BODY_BYTES
 from lorehub.retention import finalize_list
 from lorehub.state import State
 
-from .helpers import NOW, make_state, patch_body, raw, site_texts, thread_bodies, thread_detail
+from .helpers import NOW, is_address_file, make_state, patch_body, raw, site_texts, thread_bodies, thread_detail
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 quiet = lambda m: None  # noqa: E731
@@ -119,7 +119,8 @@ class BodyStorageTests(unittest.TestCase):
         finalize_list(st, "l", data, NOW)
         import gzip
         for p in st.root.rglob("*.gz"):
-            self.assertFalse(EMAIL.search(gzip.decompress(p.read_bytes()).decode()), p)
+            if not is_address_file(p):
+                self.assertFalse(EMAIL.search(gzip.decompress(p.read_bytes()).decode()), p)
 
 
 if __name__ == "__main__":

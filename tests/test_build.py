@@ -10,7 +10,7 @@ from lorehub.build import build_site
 from lorehub.crawl import CacheSource, crawl
 from lorehub.state import State
 
-from .helpers import FIXTURES, NOW, jload, make_state, raw
+from .helpers import FIXTURES, NOW, is_address_file, jload, make_state, raw
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 quiet = lambda m: None  # noqa: E731
@@ -20,7 +20,7 @@ def texts(root):
     """Yield (path, decoded text) for every text file, JSON strings decoded, gzip files (bodies, diffs, thread
     shards) unpacked first."""
     for p in Path(root).rglob("*"):
-        if p.is_file():
+        if p.is_file() and not is_address_file(p):
             raw_bytes = p.read_bytes()
             if raw_bytes[:2] == b"\x1f\x8b":
                 raw_bytes = gzip.decompress(raw_bytes)
@@ -173,6 +173,8 @@ class SmokeTests(unittest.TestCase):
         for p, t in texts(self.out):
             self.assertFalse(EMAIL.search(t), "%s: %s" % (p, EMAIL.search(t) and EMAIL.search(t).group(0)))
         for p in Site.state.root.rglob("*.gz"):
+            if is_address_file(p):
+                continue
             t = gzip.decompress(p.read_bytes()).decode()
             t = "\n".join(strings(json.loads(t)))
             self.assertFalse(EMAIL.search(t), p)

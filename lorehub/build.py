@@ -27,6 +27,7 @@ from .model import (
     state_of,
 )
 from .parse import BODY_VERSION
+from .reply import reply_shard
 from .retention import effective_retention
 from .search import build_index
 from .state import StateError, day_of, dumps, gzip_bytes
@@ -44,6 +45,7 @@ MAX_SITE_MB = 700  # GitHub Pages allows 1 GB; this keeps a safety margin
 GZ_DIFF = 0.27
 GZ_BODY = 0.30
 LIGHT_PER_ENTITY = 950  # thread detail (gzip), rows, search, profile share of one thread, measured 900
+REPLY_PER_MSG = 80  # reply shard (gzip) per message, see reply.py
 FIXED_PER_LIST = 15000  # meta.json of a list: daily chart, contributors, events, measured 15.5 KB
 DIFF_BUDGET = None  # optional extra cap in bytes on diff and body files (tests, experiments)
 
@@ -251,13 +253,14 @@ def make_events(e):
 
 
 def build_site(state, out, now, names=None, base="/", max_site_mb=MAX_SITE_MB, log=print, max_entities=MAX_ENTITIES,
-               diff_budget=DIFF_BUDGET):
+               diff_budget=DIFF_BUDGET, reply_addresses=True):
     """Build the site. When it is over `max_site_mb` whole series are left out, oldest closed ones first."""
     cap = int(max_site_mb * 1e6)
     shrink, scale, report = 0, 1.0, None
     for attempt in range(4):
         report = _build_once(state, out, now, names, base, log, save_numbers=(attempt == 0), max_entities=max_entities,
-                             cap=cap, shrink=shrink, scale=scale, diff_budget=diff_budget)
+                             cap=cap, shrink=shrink, scale=scale, diff_budget=diff_budget,
+                             reply_addresses=reply_addresses)
         ratio = report["heavy_bytes"] / report["est_heavy"] if report.get("est_heavy") and report.get("heavy_bytes") else 1.0
         if report["bytes"] > cap:
             over = report["bytes"] - cap
@@ -315,11 +318,11 @@ def est_series(e, have):
     """Estimated bytes on the site of a series: gzip of its diff shard and bodies file, plus the light JSON."""
     diff = est_size(sum(m.dz for m in have), len(have))
     body = sum(len(m.b) + 60 for m in e.members)
-    return diff * GZ_DIFF, body * GZ_BODY + LIGHT_PER_ENTITY
+    return diff * GZ_DIFF, body * GZ_BODY + LIGHT_PER_ENTITY + REPLY_PER_MSG * len(e.members)
 
 
 def _build_once(state, out, now, names, base, log, save_numbers=True, max_entities=MAX_ENTITIES, cap=MAX_SITE_MB * 10**6,
-                shrink=0, scale=1.0, diff_budget=DIFF_BUDGET):
+                shrink=0, scale=1.0, diff_budget=DIFF_BUDGET, reply_addresses=True):
     manifest = manifest_from_json(state.load_manifest())
     full_meta = state.load_meta()
     meta = full_meta.get("lists", {})
@@ -381,12 +384,25 @@ def _build_once(state, out, now, names, base, log, save_numbers=True, max_entiti
         list_keep[l] = {id(e) for e in es[:max_entities]}
         keep_ids.update(list_keep[l])
     shown_disc = [e for e in discussions if id(e) in keep_ids]
-    disc_cost = sum(LIGHT_PER_ENTITY + (sum(len(m.b) + 60 for m in e.members) * GZ_BODY) for e in shown_disc) * scale
+    disc_cost = sum(LIGHT_PER_ENTITY + REPLY_PER_MSG * len(e.members) + (sum(len(m.b) + 60 for m in e.members) * GZ_BODY)
+                    for e in shown_disc) * scale
     budget = cap - site_bytes() - FIXED_PER_LIST * len(listed) - int(disc_cost) - shrink
     if diff_budget is not None:
         budget = min(budget, diff_budget)
     chosen = pick(cands, max(0, budget))
     evicted = len(cands) - len(chosen)
+
+    amaps = {}
+
+    def write_reply(e):
+        for l in e.lists:
+            if l not in amaps:
+                try:
+                    amaps[l] = state.load_addrs(l)
+                except StateError as err:
+                    log("skipping unreadable address map: %s" % err)
+                    amaps[l] = {"post": "", "a": {}}
+        return write("reply/%s/%d.json.gz" % (e.home, e.n), reply_shard(e, thread_order(e)[1], amaps, reply_addresses), gz=True)
 
     diffs_by, shown_prs, heavy_bytes, no_files, size_by_list = {}, [], 0, 0, {}
     order = sorted((ent_by[k] for k in chosen), key=lambda e: (have_by[id(e)][0].dl, have_by[id(e)][0].t))
@@ -401,14 +417,16 @@ def _build_once(state, out, now, names, base, log, save_numbers=True, max_entiti
         shown_prs.append(e)
         sz = write("diffs/%s/%d.json.gz" % (e.home, e.n), {"p": got}, gz=True)
         sz += write("bodies/%s/%d.json.gz" % (e.home, e.n), bodies_out(thread_order(e)[1]), gz=True)
+        sz += write_reply(e)
         heavy_bytes += sz
         size_by_list[e.home] = size_by_list.get(e.home, 0) + sz
     shown_ids = {id(e) for e in shown_prs}
     est_heavy = sum(int(c[3]) for c in cands if c[4] in chosen) - LIGHT_PER_ENTITY * len(chosen)
     for e in shown_disc:
         sz = write("bodies/%s/%d.json.gz" % (e.home, e.n), bodies_out(thread_order(e)[1]), gz=True)
+        sz += write_reply(e)
         heavy_bytes += sz
-        est_heavy += int(sum(len(m.b) + 60 for m in e.members) * GZ_BODY * scale)
+        est_heavy += int((sum(len(m.b) + 60 for m in e.members) * GZ_BODY + REPLY_PER_MSG * len(e.members)) * scale)
         size_by_list[e.home] = size_by_list.get(e.home, 0) + sz
     published = shown_prs + shown_disc
     trimmed = len(discussions) - len(shown_disc)

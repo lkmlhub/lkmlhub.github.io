@@ -59,6 +59,9 @@ def build(out=None, now=NOW, days=40):
     with mock.patch.object(bf, "SEARCH_PAGE", PAGE):
         summary = run_backfill(state, source, now, Config(days=days, max_requests=500, max_total=500),
                                names=sorted(source.lists), log=lambda m: None, clock=Clock())
+    for name in source.lists:  # the posting address comes from new.atom, which the backfill does not read
+        cur = state.load_addrs(name)
+        state.save_addrs(name, "%s@lists.example.test" % name, cur["a"])
     out = Path(out) if out else Path(tmp.name) / "public"
     report = build_site(state, out, now, log=lambda m: None)
     return tmp, state, out, source, dict(report, backfill=summary)

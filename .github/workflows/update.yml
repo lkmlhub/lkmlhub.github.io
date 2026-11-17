@@ -97,6 +97,9 @@ jobs:
           COMPLETE: ${{ github.event.inputs.complete_requests || vars.LOREHUB_COMPLETE_REQUESTS || '200' }}
           MAX_SITE_MB: ${{ vars.LOREHUB_MAX_SITE_MB || '700' }}
           MAX_STATE_MB: ${{ vars.LOREHUB_MAX_STATE_MB || '650' }}
+          ADDR_REQUESTS: ${{ vars.LOREHUB_COMPLETE_ADDR_REQUESTS || '100' }}
+          # off: sender addresses for the reply e-mails of the review feature are neither collected nor published
+          LOREHUB_REPLY_ADDRESSES: ${{ vars.LOREHUB_REPLY_ADDRESSES || 'on' }}
         run: |
           REPO="${GITHUB_REPOSITORY#*/}"
           if [[ "$REPO" == *.github.io ]]; then BASE="/"; else BASE="/$REPO/"; fi
@@ -108,7 +111,7 @@ jobs:
             --deep-budget "$DEEP" --deep-pages 2 \
             --backfill-days "$BACKFILL_DAYS" --backfill-min "$BACKFILL_MIN" \
             --backfill-total "$BACKFILL_TOTAL" --backfill-list-pages "$BACKFILL_PAGES" \
-            --complete-requests "$COMPLETE" \
+            --complete-requests "$COMPLETE" --complete-addr-requests "$ADDR_REQUESTS" \
             --max-state-mb "$MAX_STATE_MB" --max-site-mb "$MAX_SITE_MB" | tee crawl.log
           {
             echo "### LkmlHub update"

@@ -129,6 +129,31 @@ def parse_feed(data):
     return entries, bad, parse_time(m.group(1)) if m else 0
 
 
+ADDR_RE = re.compile(r"^[^\s<>@,;:\"()\\\[\]]{1,64}@[^\s<>@,;:\"()\\\[\]]{1,190}\.[^\s<>@,;:\"()\\\[\]]{2,}$")
+LIST_ID_RE = re.compile(r"<id>\s*mailto:([^<\s]+)\s*</id>")
+
+
+def sender_address(raw):
+    """(author hash, address) of an entry for the reply feature, or None when the entry has no usable address.
+
+    The address is returned only to the caller that stores it in the separate address map (state.py); the record
+    that goes into the main state carries the hash alone."""
+    addr = (raw.get("email") or "").strip()
+    if len(addr) > 254 or not ADDR_RE.match(addr):
+        return None
+    return person_hash(addr), addr
+
+
+def list_address(data):
+    """The posting address of a list from its feed id (mailto:linux-kernel@vger.kernel.org), or ''."""
+    if isinstance(data, (bytes, bytearray)):
+        data = data.decode("utf-8", "replace")
+    head = data[: data.find("<entry>")] if "<entry>" in data else data
+    m = LIST_ID_RE.search(head)
+    addr = m.group(1).strip() if m else ""
+    return addr if ADDR_RE.match(addr) else ""
+
+
 def to_record(raw, keep_body=True, diffs=None):
     """Turn a raw entry into the stored record. The e-mail address is hashed and dropped.
 
