@@ -98,11 +98,11 @@
     return h('aside', { class: 'thread-side' }, parts);
   }
 
-  function versionSelect(d) {
+  function versionSelect(d, tab) {
     if (!d.vs || d.vs.length < 2) return null;
     var sel = h('select', { id: 'version-select', 'aria-label': 'Version history' });
     d.vs.forEach(function (v) {
-      var o = h('option', { value: LH.threadHref(v.home, 'pr', v.n) },
+      var o = h('option', { value: LH.threadHref(v.home, 'pr', v.n) + (tab === 'files' ? '?tab=files' : tab === 'commits' ? '?tab=commits' : '') },
         'v' + v.v + (v.rs ? ' (resend)' : '') + ' - #' + v.n + ' - ' + (LH.LABELS[v.l] ? LH.LABELS[v.l].text : v.l) + ' - ' + LH.timeAgo(v.o));
       if (v.n === d.n && v.home === d.home) o.setAttribute('selected', '');
       sel.appendChild(o);
@@ -131,13 +131,15 @@
     var ol = h('ol', { class: 'commits card' });
     patches.forEach(function (p) {
       var stat = p.ds ? h('span', { class: 'diffstat muted small' }, LH.plural(p.ds[0], 'file') + ', ',
-        h('span', { class: 'add' }, '+' + p.ds[1]), ' ', h('span', { class: 'del' }, '-' + p.ds[2])) : null;
+        h('span', { class: 'add' }, '+' + p.ds[1]), ' ', h('span', { class: 'del' }, '-' + p.ds[2]), ' ', LH.diffBars(p.ds[1], p.ds[2])) : null;
       ol.appendChild(h('li', { class: 'commit' },
         h('div', { class: 'commit-head' },
           LH.icon('commit', 'muted'),
           h('span', { class: 'chip' }, p.i + '/' + (d.total || patches.length)),
           h('strong', null, p.t), h('span', { class: 'spacer' }), stat),
-        h('div', { class: 'muted small' }, p.a ? h('a', { href: LH.authorHref(p.ah) }, p.a) : 'unknown', ' - ', LH.timeEl(p.o), ' - ', loreLink(d, p, 'diff on lore')),
+        h('div', { class: 'muted small' }, p.a ? h('a', { href: LH.authorHref(p.ah) }, p.a) : 'unknown', ' - ', LH.timeEl(p.o), ' - ',
+          d.pu ? null : [h('a', { href: LH.threadHref(d.home, 'pr', d.n) + '?tab=files&patch=' + p.i }, 'View changes'), ' - '],
+          loreLink(d, p, 'patch on lore')),
         h('details', { class: 'commit-body' }, h('summary', null, 'Commit message'), bodyNode(d, p))));
     });
     return ol;
@@ -151,7 +153,8 @@
       var d = shard[String(n)];
       if (!d) throw new Error('Thread #' + n + ' is not in the current build (it may have aged out of the window).');
       LH.setTitle(d.t + ' (' + list + ' #' + n + ')');
-      var tab = query.get('tab') === 'commits' && d.k === 'pr' ? 'commits' : 'conversation';
+      var qt = query.get('tab');
+      var tab = qt === 'commits' && d.k === 'pr' ? 'commits' : qt === 'files' && d.k === 'pr' && !d.pu ? 'files' : 'conversation';
       var verb = d.k === 'pr' ? (d.pu ? 'sent this pull request' : 'opened this patch series') : 'started this discussion';
       var banners = [];
       if (d.sb) {
@@ -167,16 +170,29 @@
           LH.pill(d.l),
           d.a ? [h('a', { href: LH.authorHref(d.ah), class: 'strong' }, d.a), ' ' + verb + ' '] : 'First seen ',
           LH.timeEl(d.o), ' - ', LH.plural(d.c, 'comment'),
-          h('span', { class: 'spacer' }), versionSelect(d)));
+          h('span', { class: 'spacer' }), versionSelect(d, tab)));
       var tabs = h('nav', { class: 'tabs', 'aria-label': 'Thread sections' },
         h('a', { class: 'tab', href: LH.threadHref(list, d.k, n), 'aria-current': tab === 'conversation' ? 'page' : null },
           'Conversation', h('span', { class: 'counter' }, String(d.c))),
         d.k === 'pr' ? h('a', { class: 'tab', href: LH.threadHref(list, d.k, n) + '?tab=commits', 'aria-current': tab === 'commits' ? 'page' : null },
-          'Commits', h('span', { class: 'counter' }, String((d.patches || []).length))) : null);
+          'Commits', h('span', { class: 'counter' }, String((d.patches || []).length))) : null,
+        d.k === 'pr' && !d.pu ? h('a', { class: 'tab', href: LH.threadHref(list, d.k, n) + '?tab=files', 'aria-current': tab === 'files' ? 'page' : null },
+          'Files changed', h('span', { class: 'counter' }, String(d.fc || 0))) : null);
       var crumbs = h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
         h('a', { href: LH.route(list) }, list), ' / ', h('a', { href: LH.route(list, d.k === 'pr' ? 'patches' : 'discussions') }, d.k === 'pr' ? 'Patches' : 'Discussions'), ' / #' + d.n);
-      LH.clear(app).appendChild(h('div', null, crumbs, head, banners, tabs,
-        h('div', { class: 'thread-layout' }, h('div', { class: 'thread-main' }, tab === 'commits' ? commits(d) : conversation(d)), sidebar(d))));
+      var mainNode;
+      if (tab === 'files') {
+        mainNode = LH.renderFiles({ d: d, list: list, n: n, query: query, bodyNode: function (m) { return bodyNode(d, m); },
+          loreLink: function (m, text) { return loreLink(d, m, text); } });
+      } else {
+        mainNode = Promise.resolve(tab === 'commits' ? commits(d) : conversation(d));
+      }
+      return mainNode.then(function (node) {
+        LH.clear(app).appendChild(h('div', null, crumbs, head, banners, tabs,
+          tab === 'files' ? h('div', { class: 'thread-wide' }, node) :
+            h('div', { class: 'thread-layout' }, h('div', { class: 'thread-main' }, node), sidebar(d))));
+        if (tab === 'files' && !query.get('file')) window.scrollTo(0, 0);
+      });
     }).catch(function (e) { LH.clear(app).appendChild(LH.errorBox(e, 'this thread')); });
   };
 })();

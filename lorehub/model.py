@@ -32,6 +32,8 @@ class Msg:
     f: str = ""
     tr: list = field(default_factory=list)
     ds: object = None
+    dz: object = None  # kept diff bytes, present when a diff is stored
+    dl: str = ""  # a list whose state holds the diff
     lists: set = field(default_factory=set)
     subj: object = None
     top: str = ""
@@ -82,11 +84,16 @@ def load_messages(state, names):
                 m = msgs[mid] = Msg(
                     mid=mid, t=r["t"], a=r.get("a", ""), h=r.get("h", ""), p=r.get("p", ""),
                     s=r.get("s", ""), b=r.get("b", ""), f=r.get("f", ""), tr=r.get("tr", []),
-                    ds=r.get("ds"),
+                    ds=r.get("ds"), dz=r.get("dz"),
                 )
                 m.subj = parse_subject(m.s)
-            elif not m.b and r.get("b"):
-                m.b = r["b"]
+                if m.dz is not None:
+                    m.dl = name
+            else:
+                if not m.b and r.get("b"):
+                    m.b = r["b"]
+                if m.dz is None and r.get("dz") is not None:
+                    m.dz, m.dl = r["dz"], name
             m.lists.add(name)
     return msgs
 

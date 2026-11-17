@@ -3,8 +3,9 @@
 import tempfile
 from pathlib import Path
 
+from lorehub.crawl import ingest
 from lorehub.feed import mid_from_href, to_record
-from lorehub.state import State, merge_records
+from lorehub.state import State
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NOW = 1794870000  # 2026-11-17, just after the fixture feeds
@@ -23,8 +24,7 @@ def make_state(lists, now=NOW):
     tmp = tempfile.TemporaryDirectory()
     st = State(tmp.name)
     for name, entries in lists.items():
-        data = {"v": 1, "name": name, "msgs": {}}
-        merge_records(data, {e["mid"]: to_record(e) for e in entries}, now)
+        _, data = ingest(st, name, entries, now, data={"v": 1, "name": name, "msgs": {}})
         st.save_list(name, data)
     return st, tmp
 

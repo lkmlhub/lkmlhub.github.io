@@ -220,13 +220,23 @@ class XssBuildTests(unittest.TestCase):
         "\"><svg onload=\"document.title='PWNED'\">",
     ]
 
+    @staticmethod
+    def hostile_patch(a, b, c):
+        path = "dir/" + a.replace(" ", "_") + ".c"
+        return (
+            "msg " + a + "\n---\n 1 file changed\n\ndiff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n"
+            "@@ -1,3 +1,4 @@ " % (path, path, path, path) + c + "\n ctx " + c + "\n-" + a + "\n+" + b + "\n+" + "A" * 100000 +
+            "\n+\x00\x1b[2Jjunk\x07\n \n"
+            "diff --git a/%s b/%s\nBinary files a/%s and b/%s differ\n" % (b.replace(" ", "_"), b.replace(" ", "_"), c.replace(" ", "_"), c.replace(" ", "_"))
+        )
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
         a, b, c = cls.PAYLOADS
         entries = [
             raw("evil-0", "[PATCH 0/1] " + a, name=b, body="cover " + c + "\nSee javascript:alert(1) and https://example.test/ok\n"),
-            raw("evil-1", "[PATCH 1/1] " + b, name=b, parent="evil-0", body=a + "\n"),
+            raw("evil-1", "[PATCH 1/1] " + b, name=b, parent="evil-0", body=cls.hostile_patch(a, b, c)),
             raw("evil-r", "Re: [PATCH 1/1] x", name=c, parent="evil-1", t=NOW - 60,
                 body="> " + a + "\nReviewed-by: " + b + " <x@example.test>\n" + c + "\n"),
         ]
@@ -277,7 +287,12 @@ class XssBuildTests(unittest.TestCase):
             first = next(k for k in n["pages"] if k.startswith("pr-"))
             row = json.loads((self.out / ("data/lists/xss/%s-0.json" % first)).read_text())["rows"][0]
             author = row["ah"]
-            routes = ["", "xss/patches", "xss/pr/%d" % row["n"], "xss/pr/%d?tab=commits" % row["n"],
+            from urllib.parse import quote
+            files_url = "xss/pr/%d?tab=files" % row["n"]
+            hostile_file = "dir/" + self.PAYLOADS[0].replace(" ", "_") + ".c"
+            routes = ["", "xss/patches", "xss/pr/%d" % row["n"], "xss/pr/%d?tab=commits" % row["n"], files_url,
+                      files_url + "&patch=1", files_url + "&file=" + quote(hostile_file, safe=""),
+                      files_url + "&file=" + quote(self.PAYLOADS[1], safe=""),
                       "xss/contributors", "xss/activity", "xss/about", "u/" + author]
             for route in routes:
                 url = "http://127.0.0.1:%d/#/%s" % (port, route)
@@ -295,6 +310,12 @@ class XssBuildTests(unittest.TestCase):
                 self.assertNotIn('href="javascript:', dom, route)
                 if route.startswith("xss/pr/") and "commits" not in route:
                     self.assertIn("&lt;script&gt;document.title", dom, "payload should show up as escaped text")
+                if "tab=files" in route:
+                    self.assertIn('class="diff-table"', dom, route)
+                    self.assertIn("&lt;img src=x onerror=", dom, route)
+                    self.assertNotIn("<img src=x", dom, route)
+                    self.assertNotIn("\x1b", dom, route)
+                    self.assertNotIn("<script>document.title", dom, route)
         finally:
             srv.shutdown()
             srv.server_close()

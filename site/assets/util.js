@@ -146,7 +146,10 @@
     moon: ['path:M13.5 9.5A5.8 5.8 0 0 1 6.5 2.5a5.8 5.8 0 1 0 7 7z'],
     check: ['path:M3 8.5l3.2 3.2L13 4.5'],
     x: ['path:M4 4l8 8M12 4l-8 8'],
-    external: ['path:M9 2h5v5M14 2 7 9M12 10v4H2V4h4']
+    external: ['path:M9 2h5v5M14 2 7 9M12 10v4H2V4h4'],
+    chevron: ['path:M4 6l4 4 4-4'],
+    folder: ['path:M1.5 3.5h4.5l1.5 2h7v7.5h-13z'],
+    search: ['circle:7,7,4.5', 'path:M10.5 10.5 14 14']
   };
   LH.icon = function (name, cls) {
     var spec = ICONS[name] || [];
@@ -204,6 +207,16 @@
     svg.appendChild(LH.svg('polygon', { points: '0,' + hgt + ' ' + pts.join(' ') + ' ' + w + ',' + hgt, class: 'spark-area' }));
     svg.appendChild(LH.svg('polyline', { points: pts.join(' '), class: 'spark-line', fill: 'none' }));
     return svg;
+  };
+
+  /* Five-box +/- proportion bar like GitHub's diffstat. */
+  LH.diffBars = function (a, d) {
+    var total = a + d, boxes = 5, na = total ? Math.round(a / total * boxes) : 0, nd = total ? boxes - na : 0;
+    if (a && !na) { na = 1; nd = boxes - 1; }
+    if (d && !nd) { nd = 1; na = boxes - 1; }
+    var span = LH.h('span', { class: 'diff-bars', 'aria-hidden': 'true' });
+    for (var i = 0; i < boxes; i++) span.appendChild(LH.h('i', { class: i < na ? 'b-add' : i < na + nd ? 'b-del' : 'b-none' }));
+    return span;
   };
 
   LH.errorBox = function (err, what) {

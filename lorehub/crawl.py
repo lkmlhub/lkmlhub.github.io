@@ -4,26 +4,46 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
+from urllib.parse import quote
+
 from . import LORE
 from .feed import parse_feed, to_record
 from .fetch import FetchError
 from .manifest import ListInfo, parse_manifest
-from .state import StateError, merge_records
+from .state import StateError, apply_diffs, merge_records
 
 MANIFEST_URL = LORE + "/manifest.js.gz"
 SEARCH_PAGE = 200
+PATCH_TERMS = "s:PATCH OR s:RFC OR s:PULL OR s:RESEND OR s:ANNOUNCE"
 
 
 def feed_url(name):
     return "%s/%s/new.atom" % (LORE, name)
 
 
-def search_url(name, since_ts, offset=0):
-    q = "dt:%s.." % time.strftime("%Y%m%d%H%M%S", time.gmtime(since_ts))
-    url = "%s/%s/?q=%s&x=A" % (LORE, name, q)
+def stamp(ts):
+    return time.strftime("%Y%m%d%H%M%S", time.gmtime(ts))
+
+
+def window_query(lo_ts, hi_ts):
+    """Patch related messages in a time window.
+
+    Verified against lore: the parentheses are required because OR binds weaker than the implicit AND
+    (without them the date bound only applies to the last term), dt: needs the 14 digit form, the upper
+    bound is inclusive and the lower bound exclusive.
+    """
+    return "(dt:%s..%s) AND (%s)" % (stamp(lo_ts), stamp(hi_ts), PATCH_TERMS)
+
+
+def window_url(name, lo_ts, hi_ts, offset=0):
+    url = "%s/%s/?x=A&q=%s" % (LORE, name, quote(window_query(lo_ts, hi_ts), safe=":()"))
     if offset:
         url += "&o=%d" % offset
     return url
+
+
+class _Empty:
+    status, body, headers = 404, b"", {}
 
 
 class LiveSource:
@@ -49,9 +69,18 @@ class LiveSource:
             self._save(name + ".atom", resp.body)
         return resp
 
-    def search_atom(self, name, since_ts, offset):
-        resp = self.fetcher.get(search_url(name, since_ts, offset))
-        self._save("%s.search-%d.atom" % (name, offset), resp.body)
+    def search_window(self, name, lo_ts, hi_ts, seq):
+        """One search Atom page (newest first, 200 entries) of patch related messages in (lo, hi].
+
+        `seq` only names the saved raw response so that an offline replay finds it again.
+        """
+        try:
+            resp = self.fetcher.get(window_url(name, lo_ts, hi_ts))
+        except FetchError as e:
+            if e.status == 404:  # public-inbox answers an empty result with 404
+                return _Empty()
+            raise
+        self._save("%s.win-%s.atom" % (name, seq), resp.body)
         return resp
 
 
@@ -74,10 +103,10 @@ class CacheSource:
             raise FetchError("no cached feed for %s" % name)
         return self._R(p.read_bytes())
 
-    def search_atom(self, name, since_ts, offset):
-        p = self.dir / ("%s.search-%d.atom" % (name, offset))
+    def search_window(self, name, lo_ts, hi_ts, seq):
+        p = self.dir / ("%s.win-%s.atom" % (name, seq))
         if not p.exists():
-            raise FetchError("no cached search page for %s" % name)
+            return _Empty()
         return self._R(p.read_bytes())
 
 
@@ -87,6 +116,30 @@ def manifest_to_json(lists):
 
 def manifest_from_json(stored):
     return {n: ListInfo(n, v.get("d", ""), v.get("m", 0), v.get("e", [])) for n, v in stored.items()}
+
+
+def ingest(state, name, entries, now, keep_bodies=True, data=None):
+    """Merge parsed feed entries into one list: messages, trimmed bodies and stored diffs.
+
+    Returns (messages added, list data). The caller saves the list data (state.save_list); the diff
+    files are written here, and are cleaned up on the next ingest if the save never happens.
+    """
+    if data is None:
+        data = state.load_list(name)
+    diffs = {}
+    records = {e["mid"]: to_record(e, keep_bodies, diffs) for e in entries}
+    added = merge_records(data, records, now)
+    apply_diffs(state, name, data, diffs)
+    return added, data
+
+
+def feed_rate(entries):
+    """Messages per day estimated from the time span of a feed page (0 when unknown)."""
+    ts = sorted(e["ts"] for e in entries if e["ts"] > 0)
+    if len(ts) < 2:
+        return 0.0
+    span = ts[-1] - ts[0]
+    return round((len(ts) - 1) / span * 86400, 1) if span > 0 else 1e5
 
 
 def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pages=2,
@@ -155,7 +208,7 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
                 raise FetchError("feed for %s parsed to zero entries (%d bad)" % (name, bad))
             data = state.load_list(name)
             before_seen = data.get("last_seen", 0)
-            added = merge_records(data, {e["mid"]: to_record(e, keep_bodies) for e in entries}, now)
+            added, data = ingest(state, name, entries, now, keep_bodies, data)
             state.save_list(name, data)
             ts = [e["ts"] for e in entries if e["ts"] > 0]
             if ts and (before_seen == 0 or min(ts) > before_seen):
@@ -163,6 +216,7 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
             m.update(
                 checked=now, fetched=now, mod=lists[name].modified, err="", n=len(data["msgs"]),
                 etag=resp.headers.get("etag", ""), lm=resp.headers.get("last-modified", ""),
+                rt=feed_rate(entries),
             )
             summary["fetched"] += 1
             summary["messages"] += added
@@ -199,40 +253,31 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
 
 
 def _gap_fill(state, source, name, since, now, pages, budget, summary, ml, keep_bodies, log):
+    """Sweep a busy list for patch related messages posted since `since` (the feed skipped them)."""
     total = 0
     data = None
+    changed = False
     try:
         data = state.load_list(name)
-        offset = 0
-        for _ in range(pages):
+        hi = now + 3600
+        for page in range(pages):
             if summary["deep_requests"] >= budget:
                 break
-            resp = source.search_atom(name, since, offset)
+            resp = source.search_window(name, since, hi, "sweep-%d" % page)
             summary["deep_requests"] += 1
             entries, _, _ = parse_feed(resp.body)
             if not entries:
                 break
-            total += merge_records(data, {e["mid"]: to_record(e, keep_bodies) for e in entries}, now)
+            added, data = ingest(state, name, entries, now, keep_bodies, data)
+            total += added
+            changed = True
             if len(entries) < SEARCH_PAGE:
                 break
-            offset += SEARCH_PAGE
+            hi = min(e["ts"] for e in entries if e["ts"] > 0)
     except (FetchError, StateError) as e:
         log("  %-28s gap fill stopped: %s" % (name, e))
-    if data is not None and total:
+    if data is not None and changed:
         state.save_list(name, data)
         summary["messages"] += total
         ml[name]["n"] = len(data["msgs"])
     log("  %-28s gap fill +%d" % (name, total))
-
-
-def backfill(state, source, now, names, hours, pages, keep_bodies=True, log=print):
-    """Explicit history bootstrap for chosen lists via search atom (200 entries per request)."""
-    meta = state.load_meta()
-    ml = meta.setdefault("lists", {})
-    summary = {"deep_requests": 0, "messages": 0}
-    for name in names:
-        ml.setdefault(name, {})
-        _gap_fill(state, source, name, now - int(hours * 3600), now, pages, pages * len(names),
-                  summary, ml, keep_bodies, log)
-    state.save_meta(meta)
-    return summary

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from .crawl import manifest_from_json
+from .diffshards import SERIES_CAP, cap_series, est_size, pick
 from .feed import lore_url
 from .groups import group_colors, group_for
 from .model import (
@@ -21,7 +22,7 @@ from .model import (
     review_summary,
     state_of,
 )
-from .state import RETENTION_DAYS, dumps
+from .state import RETENTION_DAYS, StateError, day_of, dumps
 
 SITE_DIR = Path(__file__).resolve().parent.parent / "site"
 PAGE_SIZE = 300
@@ -31,6 +32,7 @@ MAX_AUTHOR_PROFILES = 4000
 MAX_ENTITIES = 300  # newest threads published per list
 SPARK_DAYS = 30
 STALE_AFTER = 6 * 3600
+DIFF_BUDGET = 80_000_000  # bytes of published diff JSON for the whole site
 
 
 def pick_home(lists):
@@ -120,7 +122,23 @@ def msg_out(m, home, cutoff, parent_name="", limit=None):
     return o
 
 
-def make_detail(e, msgs, cutoff):
+def diff_summary(e, diffs):
+    """(files changed, added, removed) over a series. `diffs` maps patch message-id to its stored diff."""
+    paths, miss, add, rem = set(), 0, 0, 0
+    for m in e.patches:
+        d = diffs.get(m.mid) if diffs else None
+        if d is not None:
+            paths.update(f["p"] for f in d["f"])
+            add += sum(f["a"] for f in d["f"])
+            rem += sum(f["d"] for f in d["f"])
+        elif m.ds:
+            miss += m.ds[0]
+            add += m.ds[1]
+            rem += m.ds[2]
+    return len(paths) + miss, add, rem
+
+
+def make_detail(e, msgs, cutoff, diffs=None):
     by_mid = {m.mid: m for m in e.members}
     first = e.cover or (e.patches[0] if e.patches else None)
     d = {"k": e.kind, "n": e.n, "home": e.home, "t": e.title, "a": e.author_name, "ah": e.author,
@@ -145,6 +163,12 @@ def make_detail(e, msgs, cutoff):
             dict(msg_out(m, e.home, cutoff, limit=1800), i=m.subj.index or 1, t=m.subj.title or m.subj.raw)
             for m in e.patches
         ]
+        if e.patches and not e.pull:
+            fc, fa, fd = diff_summary(e, diffs)
+            if fc:
+                d["fc"], d["fa"], d["fd"] = fc, fa, fd
+            if diffs:
+                d["df"] = 1
     d["cm"] = []
     for m in e.comments:
         par = msgs.get(m.p)
@@ -180,23 +204,70 @@ def make_events(e):
     return ev
 
 
-def build_site(state, out, now, names=None, base="/", max_site_mb=300, log=print, max_entities=MAX_ENTITIES):
+def build_site(state, out, now, names=None, base="/", max_site_mb=300, log=print, max_entities=MAX_ENTITIES,
+               diff_budget=DIFF_BUDGET):
     cap = int(max_site_mb * 1e6)
     budget = int(cap * 0.35)
     report = None
     for attempt in range(4):
         report = _build_once(state, out, now, names, base, budget, log, save_numbers=(attempt == 0),
-                             max_entities=max_entities)
+                             max_entities=max_entities, diff_budget=diff_budget)
         if report["bytes"] <= cap:
             break
         log("site is %.1f MB, over the %.0f MB cap: lowering the body budget" % (report["bytes"] / 1e6, max_site_mb))
         budget //= 2
         max_entities //= 2
+        diff_budget //= 2
     report["over_cap"] = report["bytes"] > cap
     return report
 
 
-def _build_once(state, out, now, names, base, body_budget, log, save_numbers=True, max_entities=MAX_ENTITIES):
+def select_diffs(state, published, diff_budget, log):
+    """Pick the series whose diffs are published and load them: {id(entity): {message-id: diff}}."""
+    days = {}
+    cands, have_by = [], {}
+    for e in published:
+        if e.kind != "pr" or e.pull or e.ghost:
+            continue
+        have = []
+        for m in e.patches:
+            if m.dz is None or not m.dl:
+                continue
+            if m.dl not in days:
+                days[m.dl] = set(state.diff_days(m.dl))
+            if day_of(m.t) in days[m.dl]:
+                have.append(m)
+        if have:
+            have_by[id(e)] = have
+            cands.append((e.home, e.state, e.updated, est_size(sum(m.dz for m in have), len(have)), id(e)))
+    chosen = pick(cands, diff_budget)
+    need = {}
+    for e in published:
+        if id(e) in chosen:
+            for m in have_by[id(e)]:
+                need.setdefault((m.dl, day_of(m.t)), set()).add(m.mid)
+    store = {}
+    for (name, day), mids in sorted(need.items()):
+        try:
+            data = state.load_diff_day(name, day)
+        except StateError as err:
+            log("skipping unreadable diffs: %s" % err)
+            continue
+        for mid in mids:
+            if mid in data:
+                store[mid] = data[mid]
+    out = {}
+    for e in published:
+        if id(e) in chosen:
+            capped = cap_series([store.get(m.mid) for m in e.patches], SERIES_CAP)
+            got = {m.mid: d for m, d in zip(e.patches, capped) if d is not None}
+            if got:
+                out[id(e)] = got
+    return out, len(cands) - len(chosen)
+
+
+def _build_once(state, out, now, names, base, body_budget, log, save_numbers=True, max_entities=MAX_ENTITIES,
+                diff_budget=DIFF_BUDGET):
     manifest = manifest_from_json(state.load_manifest())
     meta = state.load_meta().get("lists", {})
     have_state = set(state.list_names())
@@ -240,6 +311,8 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
         if total > body_budget:
             cutoff = t + 1
             break
+
+    diffs_by, diffs_evicted = select_diffs(state, published, diff_budget, log)
 
     tmp = Path(str(out) + ".new")
     if tmp.exists():
@@ -344,10 +417,19 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
             "st": crawl, "tot": a["msgs"] if a else 0,
         })
 
+    # diffs: one lazily loaded file per series, only fetched when the Files tab is opened
+    diff_bytes = 0
+    for e in published:
+        got = diffs_by.get(id(e))
+        if got:
+            sz = write("diffs/%s/%d.json" % (e.home, e.n), {"p": got})
+            diff_bytes += sz
+            size_by_list[e.home] = size_by_list.get(e.home, 0) + sz
+
     # thread detail, sharded by number within the home list
     shards = {}
     for e in published:
-        shards.setdefault((e.home, e.n // SHARD), {})[str(e.n)] = make_detail(e, msgs, cutoff)
+        shards.setdefault((e.home, e.n // SHARD), {})[str(e.n)] = make_detail(e, msgs, cutoff, diffs_by.get(id(e)))
     for (home, idx), content in shards.items():
         sz = write("threads/%s/%d.json" % (home, idx), content)
         shard_max = max(shard_max, sz)
@@ -388,7 +470,8 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
     os.replace(tmp, out)
     return {"lists": len(lists_json), "bytes": total, "messages": len(msgs), "threads": len(published),
             "size_by_list": size_by_list, "max_shard_bytes": shard_max, "cutoff": cutoff,
-            "profiles": len(profiles), "pending": pending, "stale": stale, "trimmed": trimmed}
+            "profiles": len(profiles), "pending": pending, "stale": stale, "trimmed": trimmed,
+            "diff_bytes": diff_bytes, "diff_series": len(diffs_by), "diff_evicted": diffs_evicted}
 
 
 def _profiles(entities, msgs, agg, now):

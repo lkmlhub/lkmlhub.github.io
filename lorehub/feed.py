@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote, unquote, urlparse
 
 from . import LORE
+from .diff import extract_diff, stat_of
 from .parse import (
     classify,
     clean_body,
@@ -127,8 +128,11 @@ def parse_feed(data):
     return entries, bad, parse_time(m.group(1)) if m else 0
 
 
-def to_record(raw, keep_body=True):
-    """Turn a raw entry into the stored record. The e-mail address is hashed and dropped."""
+def to_record(raw, keep_body=True, diffs=None):
+    """Turn a raw entry into the stored record. The e-mail address is hashed and dropped.
+
+    When `diffs` is a dict and the message is a patch, its parsed diff is stored there under the message-id.
+    """
     body = raw["body"].replace("\r\n", "\n")
     subj = parse_subject(raw["subject"])
     name = " ".join(raw["name"].split())[:80]
@@ -146,9 +150,15 @@ def to_record(raw, keep_body=True):
     if trailers:
         rec["tr"] = trailers[:12]
     if subj.is_patch_message:
-        _, stat = split_diff(body)
-        if stat:
-            rec["ds"] = list(stat)
+        diff = extract_diff(body) if subj.kind == "patch" else None
+        if diff is not None:
+            rec["ds"] = stat_of(diff)
+            if diffs is not None:
+                diffs[raw["mid"]] = diff
+        else:
+            _, stat = split_diff(body)
+            if stat:
+                rec["ds"] = list(stat)
     if keep_body:
         rec["b"] = clean_body(body)
     return rec

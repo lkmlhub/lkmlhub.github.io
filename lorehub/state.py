@@ -12,6 +12,7 @@ RETENTION_DAYS = 120
 BODY_DAYS = 60
 MAX_MSGS = 10000  # newest messages kept per list, keeps the busiest lists bounded
 MAX_BODY_MSGS = 300  # newest messages that keep a body
+MAX_DIFF_MSGS = 300  # newest patch messages per list that keep a diff
 DAY = 86400
 
 
@@ -99,6 +100,38 @@ class State:
             if path.name not in keep:
                 path.unlink()
 
+    # ---- diffs: one gzip JSON file per list and UTC day, state/diffs/<list>/<YYYY-MM-DD>.json.gz
+
+    def diff_dir(self, name):
+        return self.root / "diffs" / name
+
+    def diff_days(self, name):
+        d = self.diff_dir(name)
+        return sorted(p.name[:-8] for p in d.glob("*.json.gz")) if d.is_dir() else []
+
+    def load_diff_day(self, name, day):
+        path = self.diff_dir(name) / (day + ".json.gz")
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(gzip.decompress(path.read_bytes()).decode("utf-8"))["d"]
+        except (OSError, EOFError, ValueError, KeyError, TypeError) as e:
+            raise StateError("corrupt diff state for %s (%s): %s" % (name, day, e))
+
+    def save_diff_day(self, name, day, diffs):
+        path = self.diff_dir(name) / (day + ".json.gz")
+        if not diffs:
+            if path.exists():
+                path.unlink()
+            return
+        blob = gzip_bytes(dumps({"v": 1, "d": diffs}))
+        if not path.exists() or path.read_bytes() != blob:
+            atomic_write(path, blob)
+
+    def diff_bytes(self):
+        d = self.root / "diffs"
+        return sum(p.stat().st_size for p in d.rglob("*.json.gz")) if d.is_dir() else 0
+
     def snapshot(self, name):
         return {p.name: p.read_bytes() for p in self.segments(name)}
 
@@ -177,3 +210,47 @@ def prune(data, now, retention_days=RETENTION_DAYS, body_days=BODY_DAYS,
             del r["b"]
     ts = [r["t"] for r in msgs.values()]
     data["last_seen"] = max(ts) if ts else 0
+
+
+def day_of(ts):
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))
+
+
+def apply_diffs(state, name, data, new_diffs, keep=MAX_DIFF_MSGS):
+    """Store new diffs for a list and keep only the newest `keep` patch diffs.
+
+    A record has "dz" (kept diff bytes) exactly when its diff is stored. Records that fall out of the
+    newest `keep` lose "dz" and their diff is removed from the day files, so the data branch stays bounded.
+    Only the day files that actually change are rewritten.
+    """
+    from .diff import kept_bytes  # local import: diff.py has no state dependency
+
+    msgs = data["msgs"]
+    new = {m: d for m, d in new_diffs.items() if m in msgs}
+    cands = sorted(((r["t"], m) for m, r in msgs.items() if "dz" in r or m in new), reverse=True)
+    keep_set = {m for _, m in cands[:keep]}
+    touched = set()
+    for _, mid in cands[keep:]:
+        if msgs[mid].pop("dz", None) is not None or mid in new:
+            touched.add(day_of(msgs[mid]["t"]))
+        new.pop(mid, None)
+    for mid, d in new.items():
+        msgs[mid]["dz"] = kept_bytes(d)
+        touched.add(day_of(msgs[mid]["t"]))
+    wanted = {}
+    for mid in keep_set:
+        wanted.setdefault(day_of(msgs[mid]["t"]), set()).add(mid)
+    for day in set(state.diff_days(name)) | touched:
+        mids = wanted.get(day, set())
+        if not mids:
+            state.save_diff_day(name, day, {})
+            continue
+        if day not in touched:
+            continue
+        stored = state.load_diff_day(name, day)
+        merged = {m: stored[m] for m in mids if m in stored}
+        merged.update({m: new[m] for m in mids if m in new})
+        for m in mids:
+            if m not in merged:
+                msgs[m].pop("dz", None)  # diff is gone, do not claim it exists
+        state.save_diff_day(name, day, merged)
