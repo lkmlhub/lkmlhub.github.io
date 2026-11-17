@@ -161,14 +161,21 @@ with the other lists shown as chips.
    `contents: write`, `pages: write`, `id-token: write`).
 4. Run the `update` workflow once from the Actions tab, or just push to `main`.
 
-`.github/workflows/update.yml` runs **hourly** (minute 7), on manual dispatch and on pushes to `main`. It
-checks out `main`, checks out the `data` branch into a subdirectory (creating it on the first run),
-runs the tests, crawls for up to 30 minutes (crawl, then backfill, then thread completion), builds the site, pushes the
-data branch, uploads the Pages artifact and deploys it. A concurrency group prevents overlapping
-runs and the job has a **60 minute** timeout. **Data branch pushes:** a new orphan commit each run re-sends the whole
+`.github/workflows/update.yml` runs in **chained cycles**: GitHub drops scheduled runs on busy days (one scheduled run in
+13 hours was observed), so the last job of each run waits until a minimum cycle time (10 minutes, `LOREHUB_MIN_CYCLE_MINUTES`)
+has passed since the run started and then dispatches the next run (`workflow_dispatch` from `GITHUB_TOKEN` is allowed to start
+workflows). A cron entry every 20 minutes is only a watchdog that restarts the chain if it breaks; pushes to `main` and manual
+dispatch also work. After a failed run the wait doubles. Stop the chain with the repository variable `LOREHUB_CHAIN=off` or the
+`chain=false` dispatch input. Each run checks out `main`, checks out the `data` branch into a subdirectory (creating it on the
+first run), runs the tests (on pushes only), crawls for up to 12 minutes (crawl, then backfill, then thread completion), builds
+the site, pushes the data branch, uploads the Pages artifact and deploys it. A concurrency group prevents overlapping runs (one
+running and at most one pending) and the build job has a **60 minute** timeout. Public repositories get unlimited free minutes
+on standard runners and Actions based Pages deployments are not subject to the 10 builds per hour soft limit, so the cycle is
+limited by the crawl politeness, not by CI minutes. **Data branch pushes:** a new orphan commit each run re-sends the whole
 branch (git cannot use the server's copy of unrelated history: measured, 100 percent of the objects are sent again), which at
-about 540 MB is too much, so a run adds one ordinary commit on top of `data` (only the changed day files are uploaded: a few
-MB) and the branch is squashed into one orphan commit once per UTC day (marker `state/.squashed`). `.github/workflows/ci.yml`
+about 540 MB is too much, so a run adds one ordinary commit on top of `data` (only the changed day files are uploaded) and the
+branch is squashed into one orphan commit once per UTC day, or earlier when the incremental commits since the last squash add up
+to 300 MB (`LOREHUB_SQUASH_MB`; marker `state/.squashed` holds the date and the bytes sent). `.github/workflows/ci.yml`
 runs the tests on pull requests for Python 3.10, 3.12 and the latest 3.x.
 
 The base path is derived from the repository name (`/<repo>/`, or `/` for a `<user>.github.io`
@@ -182,8 +189,8 @@ format is migrated, not discarded:** the state epoch (`state/meta.json`) is olde
 records fetched again replace the old trimmed ones, series that have an old diff stay visible (with a "shortened copy" note on
 messages that are not replaced yet), series without a diff are simply not shown until their list is walked again, and the home
 page says that history is being rebuilt. The walk converges in about four runs and the thread completion in about five more.
-Optional repository variables: `LOREHUB_BACKFILL_DAYS` (default 180, 0 = off), `LOREHUB_BACKFILL_MINUTES` (14),
-`LOREHUB_BACKFILL_TOTAL` (12000), `LOREHUB_BACKFILL_PAGES` (60), `LOREHUB_DEEP_BUDGET` (12), `LOREHUB_COMPLETE_REQUESTS` (300),
+Optional repository variables: `LOREHUB_BACKFILL_DAYS` (default 180, 0 = off), `LOREHUB_BACKFILL_MINUTES` (6), `LOREHUB_BUDGET_MINUTES` (12), `LOREHUB_MIN_CYCLE_MINUTES` (10), `LOREHUB_CHAIN` (on), `LOREHUB_SQUASH_MB` (300),
+`LOREHUB_BACKFILL_TOTAL` (12000), `LOREHUB_BACKFILL_PAGES` (60), `LOREHUB_DEEP_BUDGET` (12), `LOREHUB_COMPLETE_REQUESTS` (200),
 `LOREHUB_MAX_SITE_MB` (700), `LOREHUB_MAX_STATE_MB` (650).
 
 **robots.txt:** `https://lore.kernel.org/robots.txt` currently disallows all crawlers (`User-agent: *`,

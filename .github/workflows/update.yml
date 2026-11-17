@@ -4,16 +4,20 @@ name: update
 # time (resumable backfill, small lists first), complete the conversation of incomplete series from the
 # thread feeds, build the static site and deploy it to GitHub Pages. Never run overlapping updates.
 #
-# Hourly: with up to 700 MB of data a run needs a crawl budget of about half an hour plus the build and
-# the pushes, and the data branch is pushed as small incremental commits (see "Push the data branch").
+# Continuous cycles: GitHub drops scheduled runs on busy days (observed: 1 scheduled run in 13 hours), so the
+# workflow chains itself: the last job waits until a minimum cycle time has passed since the run started and then
+# dispatches the next run (workflow_dispatch from GITHUB_TOKEN is allowed to start workflows). The cron entry is
+# only a watchdog that restarts the chain if it ever breaks. Public repositories get unlimited free minutes on
+# standard runners; Pages deployments from an Actions workflow are not subject to the 10 builds/hour soft limit.
+# The data branch is pushed as small incremental commits (see "Push the data branch").
 on:
   schedule:
-    - cron: "7 * * * *"
+    - cron: "*/20 * * * *"  # watchdog, the chain below does the regular work
   workflow_dispatch:
     inputs:
       budget_minutes:
         description: "Crawl time budget in minutes (crawl, then backfill, then thread completion)"
-        default: "30"
+        default: "12"
       deep_budget:
         description: "Max search-atom requests per run to sweep gaps on busy lists (empty uses the repository variable LOREHUB_DEEP_BUDGET, default 12, 0 = off)"
         default: ""
@@ -21,15 +25,19 @@ on:
         description: "History horizon in days (empty uses the repository variable LOREHUB_BACKFILL_DAYS, default 180, 0 = off)"
         default: ""
       backfill_minutes:
-        description: "Backfill time budget per run in minutes, taken out of the crawl budget (default 14)"
+        description: "Backfill time budget per run in minutes, taken out of the crawl budget (default 6)"
         default: ""
       complete_requests:
-        description: "Thread requests per run to complete incomplete series (empty uses the repository variable LOREHUB_COMPLETE_REQUESTS, default 300, 0 = off)"
+        description: "Thread requests per run to complete incomplete series (empty uses the repository variable LOREHUB_COMPLETE_REQUESTS, default 200, 0 = off)"
         default: ""
+      chain:
+        description: "Dispatch the next cycle when this one ends (true or false; false stops the chain, the watchdog cron restarts it)"
+        default: "true"
   push:
     branches: [main]
 
 permissions:
+  actions: write
   contents: write
   pages: write
   id-token: write
@@ -75,17 +83,18 @@ jobs:
           python-version: "3.x"
 
       - name: Tests
+        if: github.event_name == 'push'
         run: python3 -m unittest
 
       - name: Crawl and build
         env:
-          BUDGET: ${{ github.event.inputs.budget_minutes || '30' }}
+          BUDGET: ${{ github.event.inputs.budget_minutes || vars.LOREHUB_BUDGET_MINUTES || '12' }}
           DEEP: ${{ github.event.inputs.deep_budget || vars.LOREHUB_DEEP_BUDGET || '12' }}
           BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || vars.LOREHUB_BACKFILL_DAYS || '180' }}
-          BACKFILL_MIN: ${{ github.event.inputs.backfill_minutes || vars.LOREHUB_BACKFILL_MINUTES || '14' }}
+          BACKFILL_MIN: ${{ github.event.inputs.backfill_minutes || vars.LOREHUB_BACKFILL_MINUTES || '6' }}
           BACKFILL_TOTAL: ${{ vars.LOREHUB_BACKFILL_TOTAL || '12000' }}
           BACKFILL_PAGES: ${{ vars.LOREHUB_BACKFILL_PAGES || '60' }}
-          COMPLETE: ${{ github.event.inputs.complete_requests || vars.LOREHUB_COMPLETE_REQUESTS || '300' }}
+          COMPLETE: ${{ github.event.inputs.complete_requests || vars.LOREHUB_COMPLETE_REQUESTS || '200' }}
           MAX_SITE_MB: ${{ vars.LOREHUB_MAX_SITE_MB || '700' }}
           MAX_STATE_MB: ${{ vars.LOREHUB_MAX_STATE_MB || '650' }}
         run: |
@@ -116,14 +125,19 @@ jobs:
       # is squashed into a single orphan commit so that history cannot grow without bound.
       - name: Push the data branch
         working-directory: data-branch
+        env:
+          SQUASH_MB: ${{ vars.LOREHUB_SQUASH_MB || '300' }}
         run: |
           git config user.name "lkmlhub-bot"
           git config user.email "lkmlhub-bot@users.noreply.github.com"
           TODAY="$(date -u +%Y-%m-%d)"
-          LAST="$(cat state/.squashed 2>/dev/null || true)"
+          read -r LAST SENT < <(cat state/.squashed 2>/dev/null || echo "none 0")
+          SENT="${SENT:-0}"
           MSG="Update data $(date -u +%Y-%m-%dT%H:%MZ)"
-          if [ "$LAST" != "$TODAY" ]; then
-            echo "$TODAY" > state/.squashed
+          # squash once per UTC day, or earlier when the incremental commits since the last squash add up to
+          # SQUASH_MB (many short cycles would otherwise make the repository grow between daily squashes)
+          if [ "$LAST" != "$TODAY" ] || [ "$SENT" -gt $((SQUASH_MB * 1024 * 1024)) ]; then
+            echo "$TODAY 0" > state/.squashed
             git branch -D data-squashed 2> /dev/null || true
             git checkout --orphan data-squashed
             git add -A
@@ -133,6 +147,11 @@ jobs:
             git add -A
             if git diff --cached --quiet; then echo "no change"; else
               git commit -q -m "$MSG"
+              BYTES="$(git rev-list --objects --disk-usage HEAD~1..HEAD)"
+              echo "$LAST $((SENT + BYTES))" > state/.squashed
+              git add state/.squashed
+              git commit -q --amend --no-edit
+              echo "incremental push: $BYTES bytes, $((SENT + BYTES)) since the last squash"
               git push origin HEAD:data
             fi
           fi
@@ -153,3 +172,27 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  # Next cycle: wait until the minimum cycle time has passed since this run started (so quiet periods do not
+  # turn into a tight loop and the load on lore.kernel.org stays bounded), then dispatch the workflow again.
+  # After a failure the wait is doubled. LOREHUB_CHAIN=off (repository variable) or the chain input false stop it.
+  chain:
+    needs: [build, deploy]
+    if: always() && (github.event.inputs.chain || vars.LOREHUB_CHAIN || 'true') != 'false' && (github.event.inputs.chain || vars.LOREHUB_CHAIN || 'true') != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for the minimum cycle time and dispatch the next run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MIN_CYCLE: ${{ vars.LOREHUB_MIN_CYCLE_MINUTES || '10' }}
+          RESULT_BUILD: ${{ needs.build.result }}
+          RESULT_DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          MIN="$MIN_CYCLE"
+          if [ "$RESULT_BUILD" != success ] || [ "$RESULT_DEPLOY" != success ]; then MIN=$((MIN * 2)); fi
+          STARTED="$(gh run view "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" --json createdAt -q .createdAt)"
+          WAIT=$(( $(date -d "$STARTED" +%s) + MIN * 60 - $(date +%s) ))
+          if [ "$WAIT" -gt 1500 ]; then WAIT=1500; fi
+          if [ "$WAIT" -gt 0 ]; then echo "waiting $WAIT s"; sleep "$WAIT"; fi
+          gh workflow run update.yml -R "$GITHUB_REPOSITORY" --ref "${GITHUB_REF_NAME}"
