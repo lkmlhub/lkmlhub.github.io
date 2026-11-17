@@ -51,6 +51,37 @@ class CliTests(unittest.TestCase):
         log = self.run_cli("--backfill-days", "30")
         self.assertIn("already reach back", log)
 
+    def test_defaults_are_180_days_60_pages_and_300_thread_requests(self):
+        import argparse
+        from lorehub import __main__ as m
+        ap = argparse.ArgumentParser()
+        m.add_crawl_args(ap)
+        a = ap.parse_args([])
+        self.assertEqual((a.backfill_days, a.backfill_list_pages, a.complete_requests), (180, 60, 300))
+        self.assertEqual(a.max_diff_msgs, 1000)
+        self.assertLess(a.max_state_mb, 700)
+        lim = m.limits_of(a)
+        self.assertEqual((lim.retention_days, lim.max_diff_msgs), (180, 1000))
+        a = ap.parse_args(["--backfill-days", "365"])
+        self.assertEqual(m.limits_of(a).retention_days, 365)  # retention follows the horizon
+        self.assertEqual(m.backfill_config(a).days, 365)
+
+    def test_workflow_defaults_match(self):
+        wf = (Path(__file__).resolve().parent.parent / ".github/workflows/update.yml").read_text()
+        self.assertIn("|| '180' }}", wf)
+        self.assertNotIn("'90'", wf)
+        self.assertIn("timeout-minutes: 60", wf)
+        self.assertIn("LOREHUB_COMPLETE_REQUESTS", wf)
+
+    def test_complete_command_runs_offline(self):
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = main(["complete", "--state", str(self.state), "--from-cache", str(self.cache)])
+        self.assertEqual(code, 0)
+        self.assertIn("completion:", buf.getvalue())
+
     def test_backfill_can_be_turned_off(self):
         log = self.run_cli("--backfill-days", "0")
         self.assertNotIn("backfill summary", log)

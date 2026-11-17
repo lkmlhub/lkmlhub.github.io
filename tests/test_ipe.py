@@ -15,7 +15,7 @@ import unittest
 from lorehub.feed import parse_feed
 
 from . import ipe_fixture
-from .helpers import FIXTURES, diff_shard, jload, thread_bodies, thread_detail
+from .helpers import FIXTURES, diff_shard, jload, site_texts, thread_bodies, thread_detail
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 LISTS = ["kexec", "keyrings", "linux-doc", "linux-security-module", "lkml"]
@@ -166,8 +166,11 @@ class IpeAcceptanceTests(unittest.TestCase):
         self.assertTrue(any(p.startswith("tools/testing/selftests/ipe") or "selftests" in p for p in paths))
 
     def test_no_email_addresses_in_state_or_site(self):
-        for p in self.out.rglob("*.json"):
-            self.assertFalse(EMAIL.search(p.read_text()), p)
+        seen = 0
+        for p, t in site_texts(self.out):  # plain and gzip data files: threads, bodies, diffs
+            self.assertFalse(EMAIL.search(t), p)
+            seen += p.name.endswith(".json.gz")
+        self.assertGreater(seen, 10)
         for p in self.state.root.rglob("*.gz"):
             self.assertFalse(EMAIL.search(gzip.decompress(p.read_bytes()).decode()), p)
 

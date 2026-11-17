@@ -1,24 +1,30 @@
 name: update
 
 # Crawl lore.kernel.org politely, accumulate history on the `data` branch, walk every list back in
-# time (resumable backfill, small lists first), build the static site and deploy it to GitHub Pages.
-# Never run overlapping updates.
+# time (resumable backfill, small lists first), complete the conversation of incomplete series from the
+# thread feeds, build the static site and deploy it to GitHub Pages. Never run overlapping updates.
+#
+# Hourly: with up to 700 MB of data a run needs a crawl budget of about half an hour plus the build and
+# the pushes, and the data branch is pushed as small incremental commits (see "Push the data branch").
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
       budget_minutes:
-        description: "Crawl time budget in minutes"
-        default: "25"
+        description: "Crawl time budget in minutes (crawl, then backfill, then thread completion)"
+        default: "30"
       deep_budget:
         description: "Max search-atom requests per run to sweep gaps on busy lists (empty uses the repository variable LOREHUB_DEEP_BUDGET, default 12, 0 = off)"
         default: ""
       backfill_days:
-        description: "History horizon of the backfill in days (empty uses the repository variable LOREHUB_BACKFILL_DAYS, default 90, 0 = off)"
+        description: "History horizon in days (empty uses the repository variable LOREHUB_BACKFILL_DAYS, default 180, 0 = off)"
         default: ""
       backfill_minutes:
-        description: "Backfill time budget per run in minutes, taken out of the crawl budget (default 12)"
+        description: "Backfill time budget per run in minutes, taken out of the crawl budget (default 14)"
+        default: ""
+      complete_requests:
+        description: "Thread requests per run to complete incomplete series (empty uses the repository variable LOREHUB_COMPLETE_REQUESTS, default 300, 0 = off)"
         default: ""
   push:
     branches: [main]
@@ -35,7 +41,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - name: Check out main
         uses: actions/checkout@v7
@@ -73,11 +79,15 @@ jobs:
 
       - name: Crawl and build
         env:
-          BUDGET: ${{ github.event.inputs.budget_minutes || '25' }}
+          BUDGET: ${{ github.event.inputs.budget_minutes || '30' }}
           DEEP: ${{ github.event.inputs.deep_budget || vars.LOREHUB_DEEP_BUDGET || '12' }}
-          BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || vars.LOREHUB_BACKFILL_DAYS || '90' }}
-          BACKFILL_MIN: ${{ github.event.inputs.backfill_minutes || vars.LOREHUB_BACKFILL_MINUTES || '12' }}
-          BACKFILL_TOTAL: ${{ vars.LOREHUB_BACKFILL_TOTAL || '4000' }}
+          BACKFILL_DAYS: ${{ github.event.inputs.backfill_days || vars.LOREHUB_BACKFILL_DAYS || '180' }}
+          BACKFILL_MIN: ${{ github.event.inputs.backfill_minutes || vars.LOREHUB_BACKFILL_MINUTES || '14' }}
+          BACKFILL_TOTAL: ${{ vars.LOREHUB_BACKFILL_TOTAL || '12000' }}
+          BACKFILL_PAGES: ${{ vars.LOREHUB_BACKFILL_PAGES || '60' }}
+          COMPLETE: ${{ github.event.inputs.complete_requests || vars.LOREHUB_COMPLETE_REQUESTS || '300' }}
+          MAX_SITE_MB: ${{ vars.LOREHUB_MAX_SITE_MB || '700' }}
+          MAX_STATE_MB: ${{ vars.LOREHUB_MAX_STATE_MB || '650' }}
         run: |
           REPO="${GITHUB_REPOSITORY#*/}"
           if [[ "$REPO" == *.github.io ]]; then BASE="/"; else BASE="/$REPO/"; fi
@@ -88,24 +98,44 @@ jobs:
             --budget-min "$BUDGET" \
             --deep-budget "$DEEP" --deep-pages 2 \
             --backfill-days "$BACKFILL_DAYS" --backfill-min "$BACKFILL_MIN" \
-            --backfill-total "$BACKFILL_TOTAL" | tee crawl.log
+            --backfill-total "$BACKFILL_TOTAL" --backfill-list-pages "$BACKFILL_PAGES" \
+            --complete-requests "$COMPLETE" \
+            --max-state-mb "$MAX_STATE_MB" --max-site-mb "$MAX_SITE_MB" | tee crawl.log
           {
             echo "### LoreHub update"
             echo '```'
-            tail -n 5 crawl.log
+            tail -n 8 crawl.log
             echo '```'
-            echo "Site size: $(du -sh public | cut -f1)"
+            echo "Site size: $(du -sh public | cut -f1), data branch content: $(du -sh data-branch/state | cut -f1)"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Push the data branch as a single commit
+      # Pushing a new orphan commit every run re-uploads the whole branch (git cannot use the commit the server
+      # already has as a base for unrelated history: measured, 100 percent of the objects are sent again, which at
+      # 500 MB would be every run). So a run normally adds ONE ordinary commit on top of the data branch: only the
+      # changed day files (today's, and the lists that were backfilled) are uploaded. Once per UTC day the branch
+      # is squashed into a single orphan commit so that history cannot grow without bound.
+      - name: Push the data branch
         working-directory: data-branch
         run: |
           git config user.name "lorehub-bot"
           git config user.email "lorehub-bot@users.noreply.github.com"
-          git checkout --orphan data-squashed
-          git add -A
-          git commit -q -m "Update data $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push --force origin data-squashed:data
+          TODAY="$(date -u +%Y-%m-%d)"
+          LAST="$(cat state/.squashed 2>/dev/null || true)"
+          MSG="Update data $(date -u +%Y-%m-%dT%H:%MZ)"
+          if [ "$LAST" != "$TODAY" ]; then
+            echo "$TODAY" > state/.squashed
+            git branch -D data-squashed 2> /dev/null || true
+            git checkout --orphan data-squashed
+            git add -A
+            git commit -q -m "$MSG (squashed)"
+            git push --force origin data-squashed:data
+          else
+            git add -A
+            if git diff --cached --quiet; then echo "no change"; else
+              git commit -q -m "$MSG"
+              git push origin HEAD:data
+            fi
+          fi
 
       - uses: actions/configure-pages@v6
 
@@ -116,7 +146,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

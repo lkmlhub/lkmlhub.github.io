@@ -17,11 +17,15 @@ quiet = lambda m: None  # noqa: E731
 
 
 def texts(root):
-    """Yield (path, decoded text) for every text file, JSON strings decoded."""
+    """Yield (path, decoded text) for every text file, JSON strings decoded, gzip files (bodies, diffs, thread
+    shards) unpacked first."""
     for p in Path(root).rglob("*"):
         if p.is_file():
-            t = p.read_text("utf-8", "replace")
-            if p.suffix == ".json":
+            raw_bytes = p.read_bytes()
+            if raw_bytes[:2] == b"\x1f\x8b":
+                raw_bytes = gzip.decompress(raw_bytes)
+            t = raw_bytes.decode("utf-8", "replace")
+            if p.suffix == ".json" or p.name.endswith(".json.gz"):
                 t = "\n".join(strings(json.loads(t)))
             yield p, t
 
@@ -164,6 +168,8 @@ class SmokeTests(unittest.TestCase):
                                                   "/lorehub/#/other/x"])
 
     def test_no_email_addresses_anywhere_in_output_or_state(self):
+        gz_seen = sum(1 for p, _ in texts(self.out) if p.name.endswith(".json.gz"))
+        self.assertGreater(gz_seen, 5)  # bodies, diffs and thread shards are part of the scan
         for p, t in texts(self.out):
             self.assertFalse(EMAIL.search(t), "%s: %s" % (p, EMAIL.search(t) and EMAIL.search(t).group(0)))
         for p in Site.state.root.rglob("*.gz"):
