@@ -1,14 +1,14 @@
 /* Drives the review feature in a real headless Chrome with real mouse and keyboard events (see cdp.js).
- *   node review_e2e.js CHROME BASE_URL SCENARIO FIXTURE_DIR TMP_DIR [SHOT_DIR]
+ *   node review_e2e.js CHROME BASE_URL SCENARIO FIXTURE_DIR TMP_DIR [SHOT_DIR [EXTRA]]
  * Scenarios: flow-unified, flow-split (comment on three lines, reload, review dialog, prepare, check the e-mails against the
  * golden files, download, copy, discard, identity), reply (Conversation tab composer), mobile (390 px), nostorage (no
- * localStorage). Prints "OK <scenario>" and exits 0, or throws. Nothing here is a hook of the shipped site. */
+ * localStorage), xss (hostile names, subjects, diff lines and comments on the site of XssBuildTests; EXTRA is the series number). Prints "OK <scenario>" and exits 0, or throws. Nothing here is a hook of the shipped site. */
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { launch, sleep } = require('./cdp');
 
-const [chrome, base, scenario, fixtures, tmp, shots] = process.argv.slice(2);
+const [chrome, base, scenario, fixtures, tmp, shots, extra] = process.argv.slice(2);
 const golden = (n) => fs.readFileSync(path.join(fixtures, 'golden', n), 'utf8');
 const rv = JSON.parse(golden('review.json'));
 const NODATE = (t) => t.replace(/^Date: .*$/m, 'Date: X');
@@ -420,6 +420,94 @@ async function nostorage() {
   } finally { await c.close(); }
 }
 
+
+async function xss() {
+  const N = extra;
+  const PAYLOADS = ["<script>document.title='PWNED'</script>", "<img src=x onerror=\"document.title='PWNED'\">", "\"><svg onload=\"document.title='PWNED'\">"];
+  for (const layout of ['split', 'unified']) {
+    const c = await launch({ chrome, width: 1280, height: 900, tmp });
+    const p = c.page;
+    try {
+      await p.goto(base + '/index.html#/xss/pr/' + N + '?tab=files&layout=' + layout, 'document.querySelectorAll(".rv-add").length > 2');
+      const scripts = await p.eval('document.scripts.length');
+      const safe = async (what) => {
+        assert.strictEqual(await p.eval('document.title'), (await p.eval('document.title')), what);
+        assert.notStrictEqual(await p.eval('document.title'), 'PWNED', what + ': a payload ran');
+        assert.strictEqual(await p.eval('document.scripts.length'), scripts, what + ': no script element appeared');
+        assert.strictEqual(await p.eval('document.querySelectorAll("img[src=x], svg[onload], [onerror]").length'), 0, what + ': no element came out of text');
+        assert.deepStrictEqual(p.errors, [], what + ': no page error');
+      };
+      await safe('files tab');
+      // the hostile added line (+ <img ...>) is line 3 of the first file
+      await p.click('.rv-add[data-ix="3"]', 0);
+      await p.waitFor('document.querySelector(".rv-editor textarea")');
+      await p.typeLines('Why ' + PAYLOADS.join(' ') + ' here?');
+      await p.click('.rv-editor .btn-primary');
+      await p.waitFor('!document.querySelector(".rv-editor")');
+      assert.strictEqual(await p.eval('document.querySelector(".rv-body").textContent'), 'Why ' + PAYLOADS.join(' ') + ' here?');
+      assert.ok(await p.eval('document.querySelector(".rv-box").getAttribute("aria-label").indexOf("<script>") > 0'), 'a hostile file name is an attribute value, not markup');
+      await safe('after the comment');
+      await p.click('.rv-review-btn');
+      await p.waitFor('document.querySelector(".rv-modal")');
+      await safe('review dialog');
+      assert.ok(await p.eval('document.querySelector(".rv-summary").textContent.indexOf("<script>document.title") > 0'), 'the summary shows the hostile file name as text');
+      await p.click('.rv-identity input[type=text]');
+      await p.typeLines(PAYLOADS[1]);
+      await p.click('.rv-identity input[type=email]');
+      await p.typeLines('rev@example.test');
+      await p.click('.rv-field textarea.rv-text');
+      await p.typeLines(PAYLOADS[2]);
+      await p.click('.rv-footer .btn-primary');
+      await p.waitFor('document.querySelector(".rv-mail")');
+      await safe('prepared e-mails');
+      const text = await p.eval('document.querySelector(".rv-eml").textContent');
+      assert.ok(text.includes('onerror='), 'the payload is in the e-mail as plain text');
+      assert.ok(text.includes('> +' + PAYLOADS[1]) || text.includes('> +<img src=x'), 'the hostile diff line is quoted text');
+      const head = text.split('\n\n')[0].replace(/\n /g, ' ');
+      head.split('\n').forEach((l) => assert.ok(/^[A-Za-z-]+: /.test(l), 'every header line is a header: ' + l));
+      assert.ok(/^From: "<img src=x onerror=\\"document.title='PWNED'\\">" <rev@example.test>$/m.test(head), head);
+      await p.click('[data-action=download]');
+      const names = await (async () => { for (let i = 0; i < 100; i++) { const f = fs.readdirSync(c.downloads).filter((x) => x.endsWith('.eml')); if (f.length) return f; await sleep(50); } return []; })();
+      assert.strictEqual(names.length, 1);
+      assert.ok(/^re-[a-z0-9-]+\.eml$/.test(names[0]), 'the file name is plain: ' + names[0]);
+      assert.ok(!fs.readFileSync(path.join(c.downloads, names[0]), 'utf8').includes('\r'));
+      await p.press('Escape');
+      await safe('after closing');
+      p.errors.length = 0;
+    } finally { await c.close(); }
+  }
+  // the Reply composer on hostile messages
+  const c = await launch({ chrome, width: 1280, height: 900, tmp });
+  const p = c.page;
+  try {
+    await p.goto(base + '/index.html#/xss/pr/' + N, 'document.querySelectorAll(".rv-reply-btn").length >= 3');
+    const scripts = await p.eval('document.scripts.length');
+    for (let i = 0; i < 3; i++) {
+      await p.click('.rv-reply-btn', i);
+      await p.waitFor('document.querySelector(".rv-compose")');
+      await p.typeLines('my reply ' + PAYLOADS[i]);
+      if (i === 0) {     // the identity is remembered for the next composer
+        await p.click('.rv-identity input[type=text]');
+        await p.typeLines('Rev');
+        await p.click('.rv-identity input[type=email]');
+        await p.typeLines('rev@example.test');
+      }
+      await p.click('.rv-footer .btn-primary');
+      await p.waitFor('document.querySelector(".rv-mail")');
+      assert.notStrictEqual(await p.eval('document.title'), 'PWNED');
+      assert.strictEqual(await p.eval('document.scripts.length'), scripts);
+      assert.strictEqual(await p.eval('document.querySelectorAll("img[src=x], svg[onload], [onerror]").length'), 0);
+      const t = await p.eval('document.querySelector(".rv-eml").textContent');
+      assert.ok(t.includes('my reply ' + PAYLOADS[i]));
+      const head = t.split('\n\n')[0].replace(/\n /g, ' ');
+      head.split('\n').forEach((l) => assert.ok(/^[A-Za-z-]+: /.test(l), l));
+      await p.press('Escape');
+      await p.eval('localStorage.removeItem("x")');
+    }
+    assert.deepStrictEqual(p.errors, []);
+  } finally { await c.close(); }
+}
+
 (async () => {
   console.log('scenario ' + scenario);
   if (scenario === 'flow-unified') await flow('unified');
@@ -427,6 +515,7 @@ async function nostorage() {
   else if (scenario === 'reply') await replyScenario();
   else if (scenario === 'mobile') await mobile();
   else if (scenario === 'nostorage') await nostorage();
+  else if (scenario === 'xss') await xss();
   else throw new Error('unknown scenario ' + scenario);
   console.log('OK ' + scenario);
   process.exit(0);

@@ -39,6 +39,7 @@ LEGACY = "l"
 RETRY_AFTER = DAY  # a series whose thread was fetched is not fetched again within this time
 MAX_FETCHES = 3  # per series, after that the gaps are lore's
 MAX_QUEUE_PER_LIST = 500
+MISSING_KEEP = 6  # hashes without an address kept per address queue item
 AD_KEEP = 4000  # per list: series whose address fetch is recorded in meta ("ad"), oldest are forgotten first
 
 
@@ -117,9 +118,9 @@ def coverage(e, msgs, now, orphans=None):
     return (1 if due(e, now) else 2), gaps
 
 
-def address_gap(e, known):
-    """True when a participant of series `e` has no stored sender address (`known`: set of author hashes with one)."""
-    return any(m.h and m.h not in known for m in e.members)
+def missing_addresses(e, known):
+    """Author hashes of the participants of series `e` that have no stored sender address (`known`: set of hashes with one)."""
+    return list(dict.fromkeys(m.h for m in e.members if m.h and m.h not in known))
 
 
 def scan_list_full(state, name, now, legacy=False, horizon=0, known=None, done=()):
@@ -129,10 +130,11 @@ def scan_list_full(state, name, now, legacy=False, horizon=0, known=None, done=(
     [first message id, last activity, open (1/0), gap letters, patch count]. Trimmed bodies of an older state format
     only count once the walk of the list is done (`legacy`): the walk replaces them.
 
-    Address items ([first message id, last activity]) are displayed OPEN series with a participant whose sender
-    address is unknown (`known` is the set of author hashes with an address, None turns this off) and that were not
-    fetched for addresses before (`done`: first message ids recorded in meta). A thread fetch fills the address map
-    from the whole thread, one request per series.
+    Address items ([first message id, last activity, up to MISSING_KEEP author hashes without an address, 1 when there
+    are more]) are displayed OPEN series with a participant whose sender address is unknown (`known` is the set of
+    author hashes with an address, None turns this off) and that were not fetched for addresses before (`done`: first
+    message ids recorded in meta). A thread fetch fills the address map from the whole thread, one request per series;
+    the hashes let the run skip a series whose people became known through other fetches in the meantime.
     """
     data = state.load_list(name)
     series, mm = series_of(data, name)
@@ -143,14 +145,14 @@ def scan_list_full(state, name, now, legacy=False, horizon=0, known=None, done=(
         if e.updated < horizon or not any("dz" in data["msgs"][m.mid] for m in e.patches):
             continue
         gaps = find_gaps(e, mm, legacy, orphans)
-        wants = known is not None and root_of(e).mid not in done and address_gap(e, known)
-        if not (gaps and due(e, now)) and not wants:
+        lacking = missing_addresses(e, known) if known is not None and root_of(e).mid not in done else []
+        if not (gaps and due(e, now)) and not lacking:
             continue
         compute_status(e, now)
         if gaps and due(e, now):
             out.append([root_of(e).mid, e.updated, int(e.state == "open"), gaps, len(e.patches)])
-        elif wants and e.state == "open":
-            addr.append([root_of(e).mid, e.updated])
+        elif lacking and e.state == "open":
+            addr.append([root_of(e).mid, e.updated, lacking[:MISSING_KEEP], int(len(lacking) > MISSING_KEEP)])
     out.sort(key=lambda x: (-x[2], -x[1], x[0]))
     addr.sort(key=lambda x: (-x[1], x[0]))
     return out[:MAX_QUEUE_PER_LIST], addr[:MAX_QUEUE_PER_LIST]
@@ -194,7 +196,7 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
     meta = state.load_meta()
     ml = meta.setdefault("lists", {})
     summary = {"touched": [], "requests": 0, "fetched": 0, "messages": 0, "failed": 0, "queue": 0, "left": 0,
-               "stopped": "", "scanned": 0, "addr_requests": 0, "addr_queue": 0, "addr_left": 0}
+               "stopped": "", "scanned": 0, "addr_requests": 0, "addr_queue": 0, "addr_left": 0, "addr_skipped": 0}
     horizon = now - days * DAY
     universe = [n for n in (names or state.list_names()) if n in set(state.list_names())]
     touched = set(touched or ())
@@ -266,6 +268,8 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
                 summary["messages"] += added
             if not kind:
                 mark_fetched(data, it[0], now, added)
+            if known is not None:
+                known.update(data.get("_addrs") or {})
         except StateError as e:
             summary["failed"] += 1
             log("  %-28s thread FAILED: %s" % (name, e))
@@ -291,6 +295,11 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
                     summary["stopped"] = "per run cap for address requests"
                 else:
                     name, it, kind = queue.pop(0)
+                    if kind and not it[3] and all(h in known for h in it[2]):
+                        # everybody of this series became known through other fetches: nothing left to learn from it
+                        done_item(name, it, kind)
+                        summary["addr_skipped"] += 1
+                        continue
                     summary["requests"] += 1
                     summary["addr_requests"] += 1 if kind else 0
                     pending[pool.submit(source.thread_atom, name, it[0])] = (name, it, kind)

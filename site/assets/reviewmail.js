@@ -261,14 +261,19 @@
 
   /* Who a reply goes to. To is the author of the message replied to (when its address is known); Cc is the posting
    * addresses of the lists and the other participants of the thread, each address once, without the reviewer. */
+  /* The b4 web endpoint sends patches from a devnull+ address at kernel.org, which discards mail. */
+  function isRelay(addr) { return /^devnull\+[^@\s]+@kernel\.org$/i.test(String(addr || '')); }
+
   function recipients(thread, target, reviewer) {
     var who = thread.who || {};
     var me = String(reviewer.email || '').toLowerCase();
     var seen = Object.create(null);
     seen[me] = true;
-    var person = who[target.alt || target.hash] || who[target.hash];
+    var usable = function (p) { return p && validAddr(p.addr) && !isRelay(p.addr); };
+    var person = who[target.alt] || who[target.hash], own = who[target.hash];
+    var relay = !!(own && validAddr(own.addr) && isRelay(own.addr));
     var to = [];
-    if (person && validAddr(person.addr) && !seen[person.addr.toLowerCase()]) {
+    if (usable(person) && !seen[person.addr.toLowerCase()]) {
       seen[person.addr.toLowerCase()] = true;
       to.push({ name: clean(person.name || target.name), addr: person.addr });
     }
@@ -277,13 +282,14 @@
       if (validAddr(a) && !seen[a.toLowerCase()]) { seen[a.toLowerCase()] = true; cc.push({ name: '', addr: a, list: true }); }
     });
     (thread.messages || []).forEach(function (m) {
-      var p = who[m.hash];
-      if (p && validAddr(p.addr) && !seen[p.addr.toLowerCase()]) {
-        seen[p.addr.toLowerCase()] = true;
-        cc.push({ name: clean(p.name || m.name), addr: p.addr });
-      }
+      [who[m.alt], who[m.hash]].forEach(function (p) {
+        if (usable(p) && !seen[p.addr.toLowerCase()]) {
+          seen[p.addr.toLowerCase()] = true;
+          cc.push({ name: clean(p.name || m.name), addr: p.addr });
+        }
+      });
     });
-    return { to: to, cc: cc, known: to.length > 0 };
+    return { to: to, cc: cc, known: to.length > 0, relay: relay, viaAuthor: !!(target.alt && who[target.alt] && to.length) };
   }
 
   function loreUrl(list, mid) {
@@ -378,7 +384,12 @@
     var rec = recipients(ctx.thread, target, reviewer);
     var refs = referencesFor(ctx.by, target.mid);
     var warnings = [];
-    if (!rec.known) {
+    if (rec.relay && rec.known) {
+      warnings.push({ code: 'relay-author', text: 'This message was sent through the b4 relay (a devnull address that discards mail), so the reply goes to the real author.' });
+    } else if (rec.relay) {
+      warnings.push({ code: 'relay', text: 'This message was sent through the b4 relay (a devnull address that discards mail) and the real author\'s address is not known, so To is empty. Add it yourself.' });
+    }
+    if (!rec.known && !rec.relay) {
       warnings.push({ code: 'no-to', text: 'The address of ' + (clean(target.name) || 'the author') + ' is not known to LkmlHub, so To is empty. ' +
         'Add it yourself (open the message on lore for its address).' });
     }
@@ -574,7 +585,7 @@
     var m = shard && shard.m && shard.m.length === order.length ? shard.m : null;
     var tag = '[PATCH' + (d.v > 1 ? ' v' + d.v : '');
     var messages = order.map(function (x, i) {
-      if (m) return { mid: m[i].i, parent: m[i].p || '', name: m[i].n, hash: m[i].h, ts: m[i].t, subject: m[i].s };
+      if (m) return { mid: m[i].i, parent: m[i].p || '', name: m[i].n, hash: m[i].h, alt: m[i].ah || '', ts: m[i].t, subject: m[i].s };
       var parent = x.pi !== undefined && order[x.pi] ? midOf(order[x.pi].mid) : '';
       var subject = d.k === 'pr' ? (i < base ? tag + ' 0/' + total + '] ' + d.t : i < base + (d.patches || []).length ?
         tag + ' ' + x.i + '/' + total + '] ' + x.t : 'Re: ' + d.t) : (i === 0 ? d.t : 'Re: ' + d.t);
@@ -607,7 +618,7 @@
 
   var api = {
     fromSite: fromSite, midOf: midOf,
-    clean: clean, validAddr: validAddr, cleanMid: cleanMid, mailboxText: mailboxText, headerText: headerText, encodedWords: encodedWords,
+    isRelay: isRelay, clean: clean, validAddr: validAddr, cleanMid: cleanMid, mailboxText: mailboxText, headerText: headerText, encodedWords: encodedWords,
     formatDate: formatDate, replySubject: replySubject, wrapLine: wrapLine, proseLines: proseLines, quoteLine: quoteLine,
     quoteMessage: quoteMessage, attribution: attribution, fileHeader: fileHeader, referencesFor: referencesFor,
     recipients: recipients, loreUrl: loreUrl, qpEncode: qpEncode, renderEml: renderEml, mailtoUrl: mailtoUrl,

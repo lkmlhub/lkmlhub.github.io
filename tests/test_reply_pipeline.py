@@ -234,6 +234,42 @@ class ReplyShardTests(unittest.TestCase):
         self.assertGreater(self.report["bytes"], sum(p.stat().st_size for p in (self.out / "data/reply").rglob("*.gz")))
 
 
+class RelayShardTests(unittest.TestCase):
+    def test_mail_sent_through_the_b4_relay_names_the_real_author(self):
+        body = patch_body("a.c", "r", text="Add a thing.").replace("Alice Author <alice@example.test>", "Manuel Huber <manuel@example.test>")
+        entries = [
+            raw("r-0", "[PATCH 0/1] relay: thing", name="Manuel Huber via B4 Relay", email="devnull+manuel.example.test@kernel.org", body="cover\n"),
+            raw("r-1", "[PATCH 1/1] relay: thing", name="Manuel Huber via B4 Relay", email="devnull+manuel.example.test@kernel.org", parent="r-0", body=body),
+            raw("r-r", "Re: [PATCH 1/1] relay: thing", name="Manuel Huber", email="manuel@example.test", parent="r-1", t=NOW - 60, body="Thanks.\n"),
+            raw("r-s", "Re: [PATCH 1/1] relay: thing", name="Olga", email="olga@example.test", parent="r-1", t=NOW - 50, body="ok\n"),
+        ]
+        st, tmp = make_state({"l": entries})
+        self.addCleanup(tmp.cleanup)
+        st.save_addrs("l", "l@lists.example.test", st.load_addrs("l")["a"])
+        st.save_manifest({"l": {"d": "l", "m": NOW, "e": [0]}})
+        out = Path(tmp.name) / "public"
+        build_site(st, out, NOW, log=quiet)
+        shard = jload(next((out / "data/reply/l").glob("*.json.gz")))
+        by = {m["i"]: m for m in shard["m"]}
+        real = by["r-r"]["h"]
+        self.assertEqual(by["r-1"]["ah"], real)           # the patch names its real author
+        self.assertNotIn("ah", by["r-r"])
+        self.assertEqual(shard["who"][real]["a"], "manuel@example.test")
+        self.assertEqual(shard["who"][by["r-1"]["h"]]["a"], "devnull+manuel.example.test@kernel.org")
+        self.assertEqual(shard["who"][real]["n"], "Manuel Huber")
+
+    def test_without_the_real_authors_address_there_is_no_alternative(self):
+        entries = [raw("r-1", "[PATCH] relay: thing", name="Manuel Huber via B4 Relay", email="devnull+m@kernel.org",
+                       body=patch_body("a.c", "r").replace("Alice Author <alice@example.test>", "Manuel Huber <manuel@example.test>"))]
+        st, tmp = make_state({"l": entries})
+        self.addCleanup(tmp.cleanup)
+        st.save_manifest({"l": {"d": "l", "m": NOW, "e": [0]}})
+        out = Path(tmp.name) / "public"
+        build_site(st, out, NOW, log=quiet)
+        shard = jload(next((out / "data/reply/l").glob("*.json.gz")))
+        self.assertNotIn("ah", shard["m"][0])
+
+
 class OptOutTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -321,7 +357,15 @@ class AddressQueueTests(unittest.TestCase):
         return run_completion(self.state, source, NOW, cfg or Config(), log=quiet, **kw)
 
     def threads(self, *prefixes, **kw):
-        return {p + "-0": series(p, 2, replies=[(1, "ok\n")], **kw) for p in prefixes}
+        """One thread per prefix; every series has its own people (a shared person would be learned once, see the skip test)."""
+        out = {}
+        for p in prefixes:
+            entries = series(p, 2, replies=[(1, "ok\n")], **kw)
+            for e in entries:
+                e["name"] = e["name"] + " " + p
+                e["email"] = e["name"].lower().replace(" ", ".") + "@example.test"
+            out[p + "-0"] = entries
+        return out
 
     def test_open_series_without_addresses_are_scheduled_and_fill_the_map(self):
         th = self.threads("a")
@@ -331,7 +375,7 @@ class AddressQueueTests(unittest.TestCase):
         s = self.run_q(src)
         self.assertEqual((s["queue"], s["addr_queue"], s["requests"], s["addr_requests"]), (0, 1, 1, 1))
         self.assertEqual(src.calls, [("l", "a-0")])
-        self.assertEqual(sorted(self.state.load_addrs("l")["a"].values()), ["dev@example.test", "rev0@example.test"])
+        self.assertEqual(sorted(self.state.load_addrs("l")["a"].values()), ["dev.a@example.test", "rev0.a@example.test"])
         meta = self.state.load_meta()["lists"]["l"]
         self.assertEqual(meta["aq"], [])
         self.assertEqual(meta["ad"], {"a-0": NOW})
@@ -388,6 +432,25 @@ class AddressQueueTests(unittest.TestCase):
         s = self.run_q(src, Config(max_requests=300, max_addr_requests=2))
         self.assertEqual((s["addr_queue"], s["addr_requests"], s["addr_left"]), (1, 1, 0))
         self.assertEqual(len(set(src.calls)), 5)  # each series exactly once over the three runs
+
+    def test_a_series_whose_people_became_known_meanwhile_is_skipped(self):
+        a = series("a", 2, replies=[(1, "ok\n")])
+        b = series("b", 2, replies=[(1, "ok\n")])     # the same people as series a
+        c = series("c", 2, replies=[(1, "ok\n")])
+        self.put(a + b + c)
+        src = ThreadSource({"a-0": a, "b-0": b, "c-0": c})
+        s = self.run_q(src)   # two requests run at the same time, the third series is looked at after the first answer
+        self.assertEqual((s["addr_queue"], s["requests"], s["addr_skipped"], s["addr_left"]), (3, 2, 1, 0))
+        self.assertEqual(len(src.calls), 2)
+        self.assertEqual(sorted(self.state.load_addrs("l")["a"].values()), ["dev@example.test", "rev0@example.test"])
+
+    def test_a_series_with_an_unknown_person_is_still_fetched(self):
+        a = series("a", 2, replies=[(1, "ok\n")])
+        b = series("b", 2, replies=[(1, "ok\n")]) + [raw("b-x", "Re: [PATCH 1/2] foo: add bar part 1", name="Newcomer", parent="b-1", t=NOW - 10, body="x\n")]
+        self.put(a + b)
+        src = ThreadSource({"a-0": a, "b-0": b})
+        s = self.run_q(src)
+        self.assertEqual((s["requests"], s["addr_skipped"]), (2, 0))
 
     def test_the_general_request_cap_also_applies(self):
         th = self.threads("a", "b", "c")

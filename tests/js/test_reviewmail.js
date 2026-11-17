@@ -488,6 +488,34 @@ assert.strictEqual(RM.replySubject('Reply: x'), 'Re: Reply: x');
   assert.strictEqual(parseHead(mail.text).hdr['Content-Transfer-Encoding'], '8bit');
 }
 
+// ---------------------------------------------------------------- mail sent through the b4 relay goes to the real author
+{
+  assert.strictEqual(RM.isRelay('devnull+manuelh.nvidia.com@kernel.org'), true);
+  assert.strictEqual(RM.isRelay('Devnull+x@KERNEL.ORG'), true);
+  assert.strictEqual(RM.isRelay('devnull@kernel.org'), false);
+  assert.strictEqual(RM.isRelay('devnull+x@example.test'), false);
+  const th = {
+    list: 'l', addr: 1, lists: ['l@lists.example.test'],
+    who: { r: { name: 'Manuel via B4 Relay', addr: 'devnull+manuel.example.test@kernel.org' }, m: { name: 'Manuel Huber', addr: 'manuel@example.test' },
+      o: { name: 'Olga', addr: 'olga@example.test' } },
+    messages: [{ mid: 'p1', parent: '', name: 'Manuel via B4 Relay', hash: 'r', alt: 'm', ts: 1, subject: '[PATCH 1/1] x' },
+      { mid: 'r1', parent: 'p1', name: 'Olga', hash: 'o', ts: 2, subject: 'Re: [PATCH 1/1] x' },
+      { mid: 'p2', parent: '', name: 'Manuel via B4 Relay', hash: 'r', ts: 3, subject: '[PATCH 2/2] y' }]
+  };
+  const ok = parseHead(RM.buildReply({ now: NOW, reviewer: JANE, thread: th, target: 'p1', body: 'hi' }).emails[0].text).hdr;
+  assert.strictEqual(ok.To, 'Manuel Huber <manuel@example.test>', 'the real author, not the devnull address');
+  assert.ok(ok.Cc.indexOf('devnull') < 0, 'a devnull address is never in Cc');
+  assert.ok(ok.Cc.indexOf('Olga <olga@example.test>') >= 0);
+  const w = RM.buildReply({ now: NOW, reviewer: JANE, thread: th, target: 'p1', body: 'hi' }).emails[0].warnings;
+  assert.ok(w.some((x) => x.code === 'relay-author'));
+  // the real author is not known for another message: no To, a clear warning, and no devnull address anywhere
+  const bad = RM.buildReply({ now: NOW, reviewer: JANE, thread: th, target: 'p2', body: 'hi' }).emails[0];
+  assert.strictEqual(parseHead(bad.text).hdr.To, undefined);
+  assert.ok(!/devnull/.test(bad.text.split('\n\n')[0]));
+  assert.ok(bad.warnings.some((x) => x.code === 'relay' && /discards mail/.test(x.text)));
+  assert.ok(!bad.warnings.some((x) => x.code === 'no-to'));
+}
+
 // ---------------------------------------------------------------- date, quoting, composer text
 assert.strictEqual(RM.formatDate(0), 'Thu, 1 Jan 1970 00:00:00 +0000');
 assert.strictEqual(RM.formatDate(1794870000), 'Mon, 16 Nov 2026 23:00:00 +0000');
