@@ -50,14 +50,9 @@ function qpDecode(s) {
 }
 
 // ---------------------------------------------------------------- the golden review: two comments on patch 1, one on patch 3, overall + Reviewed-by for the series
-const review = {
-  state: 'approve', trailer: 'Reviewed-by', scope: 'series',
-  overall: 'Thanks for the v2. The structure looks right to me and the new Kconfig symbol keeps the default behaviour.\nA few small things inline.',
-  comments: [
-    comment('c1', P1, 'security/ipe/keyring.c', 22, 'Why not KEY_ALLOC_BUILT_IN here? The keyring is never freed.'),
-    comment('c2', P1, 'security/ipe/keyring.c', 28, 'The message could say what failed, for example the error code from keyring_alloc().'),
-    comment('c3', P3, 'Documentation/security/ipe.rst', 5, 'The old wording "initially populated at compile-time" was useful, please keep one sentence about it.')]
-};
+const golden_review = JSON.parse(fs.readFileSync(path.join(FIX, 'golden', 'review.json'), 'utf8'));   // the same review the browser test types in
+const review = { state: 'approve', trailer: 'Reviewed-by', scope: 'series', overall: golden_review.overall, comments: golden_review.comments };
+assert.deepStrictEqual(golden_review.reviewer, JANE);
 {
   const input = deepFreeze(make(review));
   const r = RM.buildReview(input);

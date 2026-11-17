@@ -1,0 +1,33 @@
+{
+ "reviewer": {
+  "name": "Jane Reviewer",
+  "email": "jane@example.test"
+ },
+ "overall": "Thanks for the v2. The structure looks right to me and the new Kconfig symbol keeps the default behaviour.\nA few small things inline.",
+ "comments": [
+  {
+   "id": "c1",
+   "patch": "user45%40example.test",
+   "kind": "diff",
+   "path": "security/ipe/keyring.c",
+   "ix": 22,
+   "text": "Why not KEY_ALLOC_BUILT_IN here? The keyring is never freed."
+  },
+  {
+   "id": "c2",
+   "patch": "user45%40example.test",
+   "kind": "diff",
+   "path": "security/ipe/keyring.c",
+   "ix": 28,
+   "text": "The message could say what failed, for example the error code from keyring_alloc()."
+  },
+  {
+   "id": "c3",
+   "patch": "user47%40example.test",
+   "kind": "diff",
+   "path": "Documentation/security/ipe.rst",
+   "ix": 5,
+   "text": "The old wording \"initially populated at compile-time\" was useful, please keep one sentence about it."
+  }
+ ]
+}

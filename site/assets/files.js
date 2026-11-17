@@ -133,32 +133,48 @@
     return out;
   }
 
-  function unifiedRow(r) {
+  /* `rv` (optional) is the review part of the file (review.js): it adds the "+" button of a line to its gutter. */
+  function lineLabel(kind, no) { return kind === 'del' ? 'removed line ' + no : 'line ' + no; }
+
+  function unifiedRow(r, rv) {
     if (r.t === 'hunk' || r.t === 'note') {
       return h('tr', { class: r.t === 'hunk' ? 'd-hunk' : 'd-note' }, h('td', { class: 'ln' }), h('td', { class: 'ln' }), h('td', { class: 'mk' }), h('td', { class: 'code' }, r.s));
     }
-    return h('tr', { class: 'd-' + r.t },
-      h('td', { class: 'ln', 'data-n': r.o === undefined ? null : String(r.o) }),
-      h('td', { class: 'ln', 'data-n': r.n === undefined ? null : String(r.n) }),
+    var lns = [h('td', { class: 'ln', 'data-n': r.o === undefined ? null : String(r.o) }),
+      h('td', { class: 'ln', 'data-n': r.n === undefined ? null : String(r.n) })];
+    if (rv) lns[r.t === 'del' ? 0 : 1].appendChild(rv.button(r.ix, lineLabel(r.t, r.t === 'del' ? r.o : r.n)));
+    return h('tr', { class: 'd-' + r.t }, lns[0], lns[1],
       h('td', { class: 'mk' }, r.t === 'add' ? '+' : r.t === 'del' ? '-' : ' '),
       h('td', { class: 'code' }, codeNodes(r.s, r.hl)));
   }
 
-  function splitCells(c, side) {
+  function splitCells(c, side, rv) {
     var ln = h('td', { class: 'ln sp-' + c.t + (side === 'r' ? ' sp-right' : ''), 'data-n': c.no === undefined || c.t === 'note' ? null : String(c.no) });
+    if (rv && (c.t === 'ctx' || c.t === 'add' || c.t === 'del')) ln.appendChild(rv.button(c.ix, lineLabel(c.t, c.no)));
     var code = h('td', { class: 'code sp-' + c.t }, c.t === 'empty' ? null : c.t === 'note' ? c.s : codeNodes(c.s, c.hl));
     return [ln, code];
   }
 
-  function splitRow(r) {
+  function splitRow(r, rv) {
     if (r.span) {
       return h('tr', { class: r.left.t === 'hunk' ? 'd-hunk' : 'd-note' }, h('td', { class: 'ln' }), h('td', { class: 'code', colspan: '3' }, r.left.s));
     }
-    return h('tr', { class: 'd-split' }, splitCells(r.left, 'l'), splitCells(r.right, 'r'));
+    return h('tr', { class: 'd-split' }, splitCells(r.left, 'l', rv), splitCells(r.right, 'r', rv));
+  }
+
+  /* [index of the line in the file text, label] of the lines a row shows (a context line of the split layout is one line). */
+  function rowLines(r) {
+    if (r.span || r.t === 'hunk' || r.t === 'note') return [];
+    if (r.t) return [[r.ix, lineLabel(r.t, r.t === 'del' ? r.o : r.n)]];
+    var out = [];
+    [r.left, r.right].forEach(function (c) {
+      if ((c.t === 'ctx' || c.t === 'add' || c.t === 'del') && !out.some(function (x) { return x[0] === c.ix; })) out.push([c.ix, lineLabel(c.t, c.no)]);
+    });
+    return out.sort(function (a, b) { return a[0] - b[0]; });
   }
 
   /* layout is 'unified' or 'split'; the rows are added in chunks so a file with thousands of lines cannot freeze the page. */
-  function diffTable(part, layout) {
+  function diffTable(part, layout, rv) {
     var f = part.f;
     if (f.cb) return h('p', { class: 'diff-note muted' }, 'Combined (merge) diffs are not shown.');
     if (f.b && !f.x) return h('p', { class: 'diff-note muted' }, 'Binary file not shown.');
@@ -175,13 +191,17 @@
     else { Pair.markIntraline(lines); rows = lines; make = unifiedRow; }
     var tbody = h('tbody');
     var table = h('table', { class: split ? 'diff-split' : 'diff-table', 'aria-label': (split ? 'Split' : 'Unified') + ' diff of ' + f.p }, tbody);
+    if (rv && LH.review) LH.review.roving(table);
     var scroll = h('div', { class: 'diff-scroll', tabindex: '0', role: 'region', 'aria-label': 'Diff of ' + f.p }, table);
     var out = h('div', { class: 'diff-view' }, scroll);
     var shown = 0, more = null;
     function next() {
       var stop = Math.min(rows.length, shown + CHUNK_ROWS);
       var frag = document.createDocumentFragment();
-      for (; shown < stop; shown++) frag.appendChild(make(rows[shown]));
+      for (; shown < stop; shown++) {
+        frag.appendChild(make(rows[shown], rv));
+        if (rv) rv.existing(rowLines(rows[shown])).forEach(function (tr) { frag.appendChild(tr); });
+      }
       tbody.appendChild(frag);
       if (more) { out.removeChild(more); more = null; }
       if (shown < rows.length) {
@@ -197,7 +217,7 @@
   }
 
   /* ---------------------------------------------------------------- main */
-  LH.filesTab = { parseHunks: parseHunks, collect: collect, buildTree: buildTree };
+  LH.filesTab = { parseHunks: parseHunks, collect: collect, buildTree: buildTree, rowLines: rowLines };
 
   LH.renderFiles = function (ctx) {
     var d = ctx.d, list = ctx.list, n = ctx.n, query = ctx.query;
@@ -243,6 +263,7 @@
 
   function build(wrap, ctx, patches, diffs, statNote) {
     var d = ctx.d, list = ctx.list, n = ctx.n, query = ctx.query;
+    var session = ctx.session || null;   // review.js: line comments and the Review changes dialog (absent in unit tests)
     var total = d.total || patches.length;
     var only = null;
     var want = parseInt(query.get('patch'), 10);
@@ -310,7 +331,8 @@
         if (c.entry.parts.length > 1 || (only === null && patches.length > 1)) {
           c.body.appendChild(h('div', { class: 'diff-part' }, 'Patch ' + part.patch.i + '/' + total + ': ' + part.patch.t));
         }
-        c.body.appendChild(diffTable(part, layoutNow));
+        var rv = session ? LH.review.part(session, part.patch, part.f.p, 'diff', (part.f.x || '').split('\n'), 4) : null;
+        c.body.appendChild(diffTable(part, layoutNow, rv));
       });
     }
 
@@ -386,13 +408,37 @@
       var box = h('div', { class: 'card pad-sm patch-head' },
         h('div', { class: 'commit-head' }, LH.icon('commit', 'muted'), h('span', { class: 'chip' }, p.i + '/' + total), h('strong', null, p.t)),
         h('div', { class: 'muted small' }, p.a ? h('a', { href: LH.authorHref(p.ah) }, p.a) : 'unknown', ' - ', LH.timeEl(p.o), ' - ', ctx.loreLink(p, 'patch on lore')),
-        h('details', { class: 'commit-body', open: true }, h('summary', null, 'Commit message'), ctx.bodyNode(p)));
+        h('details', { class: 'commit-body', open: true }, h('summary', null, 'Commit message'), ctx.bodyNode(p)),
+        messageReview(p));
       var nav = h('div', { class: 'patch-nav' });
       var idx = patches.indexOf(p);
       if (idx > 0) nav.appendChild(h('button', { type: 'button', class: 'btn', onclick: function () { choose(String(patches[idx - 1].i)); } }, '\u2190 Previous patch'));
       if (idx + 1 < patches.length) nav.appendChild(h('button', { type: 'button', class: 'btn', onclick: function () { choose(String(patches[idx + 1].i)); } }, 'Next patch \u2192'));
       box.appendChild(nav);
       patchBox.appendChild(box);
+    }
+
+    /* Line comments on the commit message of the patch shown: the message lines with a "+" button each. */
+    function messageReview(p) {
+      var text = session && ctx.bodyText ? ctx.bodyText(p) : null;
+      if (typeof text !== 'string' || !text) return null;
+      var det = h('details', { class: 'rv-msg' }, h('summary', null, 'Comment on the commit message'));
+      var filled = false;
+      det.addEventListener('toggle', function () {
+        if (!det.open || filled) return;
+        filled = true;
+        var lines = text.split('\n'), tbody = h('tbody');
+        var rv = LH.review.part(session, p, null, 'msg', lines, 2);
+        lines.forEach(function (line, ix) {
+          tbody.appendChild(h('tr', { class: 'd-ctx' }, h('td', { class: 'ln', 'data-n': String(ix + 1) }, rv.button(ix, 'line ' + (ix + 1))), h('td', { class: 'code' }, line)));
+          rv.existing([[ix, 'line ' + (ix + 1)]]).forEach(function (tr) { tbody.appendChild(tr); });
+        });
+        var table = h('table', { class: 'diff-table rv-msg-table', 'aria-label': 'Commit message of patch ' + p.i }, tbody);
+        LH.review.roving(table);
+        det.appendChild(h('div', { class: 'diff-scroll', tabindex: '0', role: 'region', 'aria-label': 'Commit message lines' }, table));
+      });
+      if (session.drafts.comments.some(function (c) { return c.patch === p.mid && c.kind === 'msg'; })) det.open = true;
+      return det;
     }
 
     function warnings() {
@@ -451,6 +497,48 @@
         var hit = cards.filter(function (c) { return c.entry.path === focus; })[0];
         if (hit) focusFile(hit, false);
       }
+    }
+
+    /* Scroll to a saved comment (from the list in the review dialog), switching to its patch and showing more lines if needed. */
+    function reveal(c) {
+      var p = patches.filter(function (x) { return x.mid === c.patch; })[0];
+      if (!p) return;
+      if (only !== null && only !== p.i) choose(String(p.i));
+      var find = function (root) { return root.querySelector('[data-cid="' + c.id + '"]'); };
+      var el = null;
+      if (c.kind === 'msg') {
+        if (only === null) choose(String(p.i));
+        var det = patchBox.querySelector('details.rv-msg');
+        if (det) { det.open = true; el = find(det); }
+      } else {
+        var card = cards.filter(function (x) { return x.entry.path === c.path; })[0];
+        if (!card) return;
+        focusFile(card, false);
+        for (var guard = 0; guard < 80 && !(el = find(card.body)); guard++) {
+          var more = card.body.querySelector('.diff-more button');
+          if (!more) break;
+          more.click();
+        }
+      }
+      if (el) {
+        el.scrollIntoView({ block: 'center' });
+        el.classList.add('rv-flash');
+        setTimeout(function () { el.classList.remove('rv-flash'); }, 1500);
+        var b = el.querySelector('button');
+        if (b) b.focus({ preventScroll: true });
+      }
+    }
+
+    /* After "Discard review": every card that is on the page is built again, without the comments. */
+    function rebuild() {
+      cards.forEach(function (c) {
+        if (!c.built) return;
+        c.built = false;
+        LH.clear(c.body);
+        if (!c.body.hidden) fill(c);
+      });
+      var det = patchBox.querySelector('details.rv-msg');
+      if (det) { patchHeader(); }
     }
 
     function choose(val) {
@@ -535,8 +623,20 @@
       seg,
       h('button', { type: 'button', class: 'btn', onclick: function () { all(true); } }, 'Expand all'),
       h('button', { type: 'button', class: 'btn', onclick: function () { all(false); } }, 'Collapse all'),
-      treeToggle);
+      treeToggle,
+      session ? LH.review.reviewButton(session) : null);
     wrap.appendChild(toolbar);
+    if (session) {
+      session.revealer = reveal;
+      session.afterDiscard = rebuild;
+      session.diffs = diffs;
+      if (!session.drafts.persistent) {
+        wrap.appendChild(h('p', { class: 'banner banner-warn', 'data-notice': 'no-storage' },
+          'This browser does not allow local storage here (private mode?), so review comments are kept in memory only: they are gone when you reload or leave this page.'));
+      }
+      wrap.appendChild(h('p', { class: 'muted small rv-hint', 'data-hint': 'review' },
+        'Review by e-mail: hover a line and press + to comment on it, then Review changes prepares the plain text replies for your own mail client. Nothing is sent from here.'));
+    }
     wrap.appendChild(banners);
     wrap.appendChild(layout);
     /* the tree starts hidden on a phone, and on a medium window when the split layout needs the room */

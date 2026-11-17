@@ -71,7 +71,8 @@
           m.a ? h('a', { href: LH.authorHref(m.ah), class: 'strong' }, m.a) : h('span', { class: 'strong' }, 'Unknown'),
           h('span', { class: 'muted' }, ' ' + verb + ' '), LH.timeEl(m.o),
           replyContext(m),
-          h('span', { class: 'spacer' }), flagChips(m), loreLink(ctx.d, m, 'View on lore')),
+          h('span', { class: 'spacer' }), flagChips(m), loreLink(ctx.d, m, 'View on lore'),
+          ctx.session ? LH.review.replyButton(ctx.session, i) : null),
         bodyNode(ctx, i)));
   }
 
@@ -91,7 +92,7 @@
         h('strong', null, p.t), h('span', { class: 'spacer' }), stat, flagChips(p)),
       h('div', { class: 'muted small' }, p.a ? h('a', { href: LH.authorHref(p.ah) }, p.a) : 'unknown', ' - ', LH.timeEl(p.o), ' - ',
         h('a', { href: LH.threadHref(d.home, 'pr', d.n) + '?tab=files&patch=' + p.i }, p.nd ? 'Patch (diff not stored)' : 'View changes'), ' - ',
-        loreLink(d, p, 'patch on lore')),
+        loreLink(d, p, 'patch on lore'), ctx.session ? [' - ', LH.review.replyButton(ctx.session, i)] : null),
       msg);
   }
 
@@ -335,11 +336,13 @@
         h('a', { href: LH.route(list) }, list), ' / ', h('a', { href: LH.route(list, d.k === 'pr' ? 'patches' : 'discussions') }, d.k === 'pr' ? 'Patches' : 'Discussions'), ' / #' + d.n);
       var bodiesP = LH.getGz('data/bodies/' + encodeURIComponent(d.home) + '/' + d.n + '.json.gz').then(function (x) { return x.b; }, function () { return null; });
       return bodiesP.then(function (bodies) {
-        var ctx = { d: d, order: order, bodies: bodies };
+        var session = LH.review ? LH.review.session({ d: d, bodies: bodies }) : null;
+        var ctx = { d: d, order: order, bodies: bodies, session: session };
         var mainNode;
         if (tab === 'files') {
-          mainNode = LH.renderFiles({ d: d, list: d.home, n: n, query: query,
+          mainNode = LH.renderFiles({ d: d, list: d.home, n: n, query: query, session: session,
             bodyNode: function (m) { return bodyNode(ctx, order.indexOf(m)); },
+            bodyText: function (m) { var t = bodies ? bodies[order.indexOf(m)] : null; return typeof t === 'string' ? t : null; },
             loreLink: function (m, text) { return loreLink(d, m, text); } });
         } else {
           mainNode = Promise.resolve(tab === 'commits' ? commits(ctx) : conversation(ctx));
