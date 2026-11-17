@@ -379,8 +379,10 @@ a.reply-ctx:hover { text-decoration: underline; }
 }
 
 /* split layout: two columns, each with its own gutter; the table scrolls as a whole inside the card */
-.diff-split { width: 100%; min-width: 760px; }
-.diff-split .code { width: 50%; min-width: 360px; }
+/* like GitHub: the two halves share the card width and long lines wrap, so no horizontal scrollbar is needed */
+.diff-split { width: 100%; min-width: 0; table-layout: fixed; }
+.diff-split .ln { width: 52px; min-width: 52px; }
+.diff-split .code { width: auto; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .diff-split .ln.sp-right { border-left: 1px solid var(--border); }
 .diff-split .code::before { display: inline-block; width: 1.5ch; margin-left: 4px; content: ' '; user-select: none; color: var(--fg-muted); }
 .diff-split .code.sp-add::before { content: '+'; color: var(--add); }

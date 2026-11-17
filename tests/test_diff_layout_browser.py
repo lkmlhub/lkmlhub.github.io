@@ -233,10 +233,10 @@ class SplitLayoutIpeTests(unittest.TestCase):
         self.assertEqual(r["leftNums"], ctx + r["delCells"])
         self.assertEqual(r["rightNums"], ctx + r["addCells"])
         self.assertGreater(r["ihSplit"], 0)
-        # width: the page never overflows, wide diffs scroll inside their card
+        # width: the page never overflows and, like GitHub, the split halves wrap long lines so no card needs a scrollbar
         self.assertEqual(r["pageOverflow"][0], r["pageOverflow"][1])
         self.assertTrue(all(s[0] == "auto" for s in r["scrollers"]))
-        self.assertTrue(any(s[1] for s in r["scrollers"]))
+        self.assertFalse(any(s[1] for s in r["scrollers"]), r["scrollers"])
         # the control
         self.assertEqual(r["pressed"], ["false", "true"])
         self.assertFalse(r["disabled"])
@@ -340,7 +340,7 @@ class SplitLayoutLargeFileTests(unittest.TestCase):
         cls.tmp.cleanup()
         cls.tmp2.cleanup()
 
-    def test_large_file_is_rendered_in_chunks_and_wide_lines_scroll_inside_the_card(self):
+    def test_large_file_is_rendered_in_chunks_and_wide_lines_wrap_in_split(self):
         r = self.site.drive(1280, BIG, N=self.n)
         self.assertNotIn("error", r)
         self.assertEqual(r["cards"], 3)
@@ -354,7 +354,8 @@ class SplitLayoutLargeFileTests(unittest.TestCase):
         # binary and rename-only files are plain notes above both columns
         self.assertTrue(any("Binary file not shown" in t for t in r["notes"]), r["notes"])
         self.assertTrue(any("renamed without changes" in t for t in r["notes"]), r["notes"])
-        self.assertTrue(any(w[0] > w[1] for w in r["scrollW"]), r["scrollW"])
+        # split lines wrap, so no card gets wider than its box (allow 1px rounding)
+        self.assertTrue(all(w[0] <= w[1] + 1 for w in r["scrollW"]), r["scrollW"])
         # the unified layout is chunked as well
         self.assertEqual(r["uRows"], 2000)
         self.assertEqual(len(r["uMore"]), 1)
