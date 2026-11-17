@@ -9,7 +9,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from .backfill import history_start, horizon_ts, is_done, stop_reason
-from .complete import coverage
+from .complete import coverage, orphan_keys
 from .crawl import manifest_from_json
 from .diffshards import SERIES_CAP, cap_series, est_size, pick
 from .feed import lore_url
@@ -169,7 +169,7 @@ def bodies_out(order):
     return {"b": [m.b if has_body(m) else None for m in order]}
 
 
-def make_detail(e, msgs, diffs=None, shown=None, now=0):
+def make_detail(e, msgs, diffs=None, shown=None, now=0, orphans=None):
     first, order = thread_order(e)
     idx = {m.mid: i for i, m in enumerate(order)}
     d = {"k": e.kind, "n": e.n, "home": e.home, "t": e.title, "a": e.author_name, "ah": e.author,
@@ -203,7 +203,7 @@ def make_detail(e, msgs, diffs=None, shown=None, now=0):
             d["fc"], d["fa"], d["fd"] = fc, fa, fd
         if diffs:
             d["df"] = 1
-        d["cp"], gaps = coverage(e, msgs, now)
+        d["cp"], gaps = coverage(e, msgs, now, orphans)
         if gaps:
             d["gp"] = gaps
     d["cm"] = []
@@ -519,9 +519,10 @@ def _build_once(state, out, now, names, base, log, save_numbers=True, max_entiti
 
     # thread detail (no message text, see bodies/), sharded by number within the home list
     shards = {}
+    orphans = orphan_keys(msgs)
     for e in published:
         shards.setdefault((e.home, e.n // SHARD), {})[str(e.n)] = make_detail(
-            e, msgs, diffs_by.get(id(e)) if e.kind == "pr" else None, shown_ids, now)
+            e, msgs, diffs_by.get(id(e)) if e.kind == "pr" else None, shown_ids, now, orphans)
     for (home, idx), content in shards.items():
         sz = write("threads/%s/%d.json.gz" % (home, idx), content, gz=True)
         shard_max = max(shard_max, sz)

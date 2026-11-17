@@ -72,6 +72,8 @@ def main(cache2, cache3=None):
                 else:
                     patches += 1
             real["v%d" % v] = {"entries": len(mids), "cover_and_patches": patches, "replies": replies, "mids": sorted(mids)}
+        v2 = (Path(cache3) / "ipe-v2-cover-t.atom").read_text("utf-8")
+        (HERE / "thread-v2.atom").write_text(EMAIL.sub(sub, v2), "utf-8")  # a real t.atom, header included
         (HERE / "real-threads.json").write_text(json.dumps(real, indent=1), "utf-8")
         print({k: (r["entries"], r["replies"]) for k, r in real.items()})
     ipe = set(entries)

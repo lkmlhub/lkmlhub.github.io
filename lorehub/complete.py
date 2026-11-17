@@ -31,7 +31,7 @@ from .crawl import ingest, thread_url  # noqa: F401
 from .feed import parse_feed
 from .fetch import FetchError
 from .model import compute_status, link_versions
-from .parse import BODY_VERSION
+from .parse import BODY_VERSION, norm_title
 from .retention import Limits, effective_retention, finalize_list, series_of
 from .state import DAY, StateError
 
@@ -53,8 +53,23 @@ def root_of(e):
     return e.cover or (e.patches[0] if e.patches else None)
 
 
-def find_gaps(e, msgs, legacy=False):
-    """Reasons ("p", "n", "c", "l" as one string, sorted) why the conversation of series `e` looks incomplete."""
+def subject_key(s):
+    """What a reply shares with the patch it answers: version, number, total and the normalised title."""
+    return (s.version, s.index or 0, s.total or 0, norm_title(s.title))
+
+
+def orphan_keys(msgs):
+    """Subject keys of replies to patches whose parent message is not in the state. Such a reply is not part of
+    any thread we can see (it forms an entity of its own), the series it belongs to is found by its subject."""
+    return {subject_key(m.subj) for m in msgs.values()
+            if m.subj.is_reply and m.subj.kind == "patch" and m.p and m.p not in msgs}
+
+
+def find_gaps(e, msgs, legacy=False, orphans=None):
+    """Reasons ("p", "n", "c", "l" as one string, sorted) why the conversation of series `e` looks incomplete.
+
+    `orphans` is orphan_keys(msgs) (computed once for many series); without it only the series' own messages
+    are looked at."""
     gaps = set()
     root = root_of(e)
     for m in e.comments:
@@ -65,6 +80,8 @@ def find_gaps(e, msgs, legacy=False):
         if m is not root and m.p and m.p not in msgs:
             gaps.add("p")
             break
+    if orphans and any(subject_key(m.subj) in orphans for m in e.patches + ([e.cover] if e.cover else [])):
+        gaps.add("p")
     if e.total > 1:
         have = {m.subj.index for m in e.patches if m.subj.index}
         if any(i not in have for i in range(1, e.total + 1)):
@@ -89,10 +106,10 @@ def due(e, now):
     return not tc or (now - tc >= RETRY_AFTER and tn < MAX_FETCHES)
 
 
-def coverage(e, msgs, now):
+def coverage(e, msgs, now, orphans=None):
     """(code, gap letters) of a displayed series: 0 complete, 1 waiting for a thread fetch (or the walk),
     2 fetched but lore has no more (gaps remain until a retry)."""
-    gaps = find_gaps(e, msgs, legacy=True)
+    gaps = find_gaps(e, msgs, legacy=True, orphans=orphans)
     if not gaps:
         return 0, ""
     return (1 if due(e, now) else 2), gaps
@@ -107,11 +124,12 @@ def scan_list(state, name, now, legacy=False, horizon=0):
     data = state.load_list(name)
     series, mm = series_of(data, name)
     link_versions(series)
+    orphans = orphan_keys(mm)
     out = []
     for e in series:
         if e.updated < horizon or not any("dz" in data["msgs"][m.mid] for m in e.patches):
             continue
-        gaps = find_gaps(e, mm, legacy)
+        gaps = find_gaps(e, mm, legacy, orphans)
         if not gaps or not due(e, now):
             continue
         compute_status(e, now)
@@ -120,11 +138,13 @@ def scan_list(state, name, now, legacy=False, horizon=0):
     return out[:MAX_QUEUE_PER_LIST]
 
 
-def mark_fetched(data, mid, now):
+def mark_fetched(data, mid, now, added):
+    """Record a thread fetch on the series' first message. A fetch that found nothing new is final: the gaps
+    that remain are lore's, fetching again would only repeat the answer."""
     rec = data["msgs"].get(mid)
     if rec is not None:
         rec["tc"] = now
-        rec["tn"] = rec.get("tn", 0) + 1
+        rec["tn"] = rec.get("tn", 0) + 1 if added else MAX_FETCHES
 
 
 def run_completion(state, source, now, cfg=None, names=None, touched=None, log=print, clock=time.monotonic,
@@ -183,10 +203,11 @@ def run_completion(state, source, now, cfg=None, names=None, touched=None, log=p
             data = open_lists.get(name)
             if data is None:
                 data = open_lists[name] = state.load_list(name)
+            added = 0
             if entries:
                 added, _ = ingest_all(state, name, entries, now, data)
                 summary["messages"] += added
-            mark_fetched(data, it[0], now)
+            mark_fetched(data, it[0], now, added)
         except StateError as e:
             summary["failed"] += 1
             log("  %-28s thread FAILED: %s" % (name, e))

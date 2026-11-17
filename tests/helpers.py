@@ -21,6 +21,15 @@ def raw(mid, subject, name="Alice Author", email=None, t=NOW - 3600, parent="", 
     }
 
 
+def patch_body(path="drivers/x.c", extra="", text="Commit text."):
+    """A patch mail body with a one line diff (so the series has a stored diff)."""
+    return (
+        "%s\n\nSigned-off-by: Alice Author <alice@example.test>\n---\n 1 file changed, 1 insertion(+)\n\n"
+        "diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n@@ -1,2 +1,3 @@\n a\n+new line %s\n b\n-- \n2.43.0\n"
+        % (text, path, path, path, path, extra)
+    )
+
+
 def atom(entries, list_name="x"):
     """Atom document (as public-inbox serves it) for raw entries, newest first."""
     import html
@@ -100,5 +109,5 @@ def diff_shard(out, home, n):
     return jload(Path(out) / ("data/diffs/%s/%d.json.gz" % (home, n)))["p"]
 
 
-__all__ = ["raw", "make_state", "load", "NOW", "FIXTURES", "mid_from_href", "jload", "site_texts", "thread_detail",
+__all__ = ["patch_body", "raw", "make_state", "load", "NOW", "FIXTURES", "mid_from_href", "jload", "site_texts", "thread_detail",
            "thread_bodies", "diff_shard"]

@@ -117,6 +117,14 @@ def run_backfill(args):
                         limits=limits_of(args))
 
 
+def run_complete(args):
+    state = State(args.state)
+    source = CacheSource(args.from_cache) if args.from_cache else LiveSource(Fetcher(), args.save_raw)
+    now = int(time.time())
+    return run_completion(state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=args.complete_min * 60),
+                          names=split_lists(args.lists), touched=None, log=log, limits=limits_of(args), days=args.backfill_days)
+
+
 def run_build(args):
     from .build import build_site
 
@@ -143,6 +151,13 @@ def main(argv=None):
     p.add_argument("--no-bodies", action="store_true", help="do not store message bodies")
     p.add_argument("--from-cache", help="replay raw responses saved by --save-raw")
     p.add_argument("--save-raw", help="save raw HTTP responses into this directory")
+    p = sub.add_parser("complete", help="run only the thread completion queue (whole threads of incomplete series)")
+    add_common(p)
+    p.add_argument("--complete-requests", type=int, default=300, help="max thread requests in this run")
+    p.add_argument("--complete-min", type=float, default=8, help="time budget in minutes")
+    add_backfill_args(p)
+    p.add_argument("--from-cache", help="replay raw responses saved by --save-raw")
+    p.add_argument("--save-raw", help="save raw HTTP responses into this directory")
     p = sub.add_parser("build", help="build the static site from the state directory")
     add_common(p)
     add_build_args(p)
@@ -155,6 +170,8 @@ def main(argv=None):
         run_crawl(args)
     elif args.cmd == "backfill":
         run_backfill(args)
+    elif args.cmd == "complete":
+        run_complete(args)
     elif args.cmd == "build":
         run_build(args)
     else:
