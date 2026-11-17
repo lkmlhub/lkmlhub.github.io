@@ -25,6 +25,7 @@
   function dispatch() {
     var r = parse(), p = r.parts;
     var done;
+    document.body.classList.remove('view-files');   // the thread view adds it back for the Files changed tab
     if (!p.length) done = LH.renderHome(app);
     else if (p[0] === 'about' && p.length === 1) done = LH.renderAbout(app);
     else if (p[0] === 'search' && p.length === 1) done = LH.renderSearch(app, r.query);

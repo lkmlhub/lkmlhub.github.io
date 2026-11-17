@@ -304,6 +304,7 @@
       LH.setTitle(d.t + ' (' + list + ' #' + n + ')');
       var qt = query.get('tab');
       var tab = qt === 'commits' && d.k === 'pr' ? 'commits' : qt === 'files' && d.k === 'pr' ? 'files' : 'conversation';
+      document.body.classList.toggle('view-files', tab === 'files');
       var order = orderOf(d);
       var verb = d.k === 'pr' ? 'opened this patch series' : d.pu ? 'sent this pull request' : 'started this discussion';
       var banners = [];

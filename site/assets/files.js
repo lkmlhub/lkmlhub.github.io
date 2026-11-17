@@ -10,6 +10,8 @@
   var LAYOUT_KEY = 'lkmlhub-diff-layout';
   var CHUNK_ROWS = 2000;        // rows of one file part rendered at once, the rest comes with "Show more lines"
   var WIDE_QUERY = '(min-width: 900px)';   // below this the split layout is not offered
+  var TREE_W = 240, GUTTER_W = 50, MIN_HALF = 450;   // file tree width, line number column, least width of one split half
+  var WIDE_MAX = 1600, WIDE_PAD = 32;      // the Files changed page uses min(1600px, 96vw), see .view-files in style.css
   var Pair = window.LHDiffPair;
 
   /* ---------------------------------------------------------------- pure helpers (no DOM) */
@@ -157,7 +159,9 @@
 
   function splitRow(r, rv) {
     if (r.span) {
-      return h('tr', { class: r.left.t === 'hunk' ? 'd-hunk' : 'd-note' }, h('td', { class: 'ln' }), h('td', { class: 'code', colspan: '3' }, r.left.s));
+      var hunk = r.left.t === 'hunk';
+      return h('tr', { class: hunk ? 'd-hunk' : 'd-note' }, h('td', { class: 'ln hk-ln' }, hunk ? LH.icon('unfold') : null),
+        h('td', { class: 'code', colspan: '3' }, r.left.s));
     }
     return h('tr', { class: 'd-split' }, splitCells(r.left, 'l', rv), splitCells(r.right, 'r', rv));
   }
@@ -171,6 +175,19 @@
       if ((c.t === 'ctx' || c.t === 'add' || c.t === 'del') && !out.some(function (x) { return x[0] === c.ix; })) out.push([c.ix, lineLabel(c.t, c.no)]);
     });
     return out.sort(function (a, b) { return a[0] - b[0]; });
+  }
+
+  /* GitHub lets a click select the text of one half only: the other half's code is made unselectable until the next click. */
+  function pickSide(ev) {
+    var td = ev.target && ev.target.closest ? ev.target.closest('td') : null, table = ev.currentTarget;
+    if (!td || !td.parentNode || !td.parentNode.classList.contains('d-split')) { table.classList.remove('sel-l', 'sel-r'); return; }
+    var right = td.cellIndex >= 2;
+    table.classList.toggle('sel-r', !right);
+    table.classList.toggle('sel-l', right);
+  }
+
+  function splitColumns() {
+    return h('colgroup', null, h('col', { class: 'c-ln' }), h('col', { class: 'c-code' }), h('col', { class: 'c-ln' }), h('col', { class: 'c-code' }));
   }
 
   /* layout is 'unified' or 'split'; the rows are added in chunks so a file with thousands of lines cannot freeze the page. */
@@ -190,8 +207,10 @@
     if (split) { rows = Pair.pairRows(lines); make = splitRow; }
     else { Pair.markIntraline(lines); rows = lines; make = unifiedRow; }
     var tbody = h('tbody');
-    var table = h('table', { class: split ? 'diff-split' : 'diff-table', 'aria-label': (split ? 'Split' : 'Unified') + ' diff of ' + f.p }, tbody);
+    var table = h('table', { class: split ? 'diff-split' : 'diff-table', 'aria-label': (split ? 'Split' : 'Unified') + ' diff of ' + f.p },
+      split ? splitColumns() : null, tbody);
     if (rv && LH.review) LH.review.roving(table);
+    if (split) table.addEventListener('mousedown', pickSide);
     var scroll = h('div', { class: 'diff-scroll', tabindex: '0', role: 'region', 'aria-label': 'Diff of ' + f.p }, table);
     var out = h('div', { class: 'diff-view' }, scroll);
     var shown = 0, more = null;
@@ -214,6 +233,13 @@
     next();
     if (f.t) out.appendChild(h('p', { class: 'diff-note muted' }, 'The rest of this file is not shown, the patch was cut at LkmlHub\'s size limit.'));
     return out;
+  }
+
+  /* Width of one code half of the split layout when the page uses the wide container (see .view-files in style.css). */
+  function halfWidth(withTree) {
+    var vw = Math.min(window.innerWidth || 1280, document.documentElement.clientWidth || 1280);
+    var inner = Math.min(WIDE_MAX, 0.96 * vw) - WIDE_PAD - (withTree ? TREE_W + 16 : 0);
+    return (inner - 2 * GUTTER_W) / 2;
   }
 
   /* ---------------------------------------------------------------- main */
@@ -366,9 +392,8 @@
       var box = h('input', { type: 'checkbox', 'aria-label': 'Mark ' + e.path + ' as viewed' });
       var link = h('a', { class: 'diff-name-link', href: params(e.path), title: 'Link to this file' }, title);
       var section = h('section', { class: 'diff-file', id: 'diff-file-' + i, 'aria-label': e.path },
-        h('header', { class: 'diff-file-head' }, toggle, h('span', { class: 'diff-name' }, link), badges,
-          h('span', { class: 'spacer' }), counts(e.a, e.d), bars(e.a, e.d),
-          h('label', { class: 'viewed' }, box, ' Viewed')));
+        h('header', { class: 'diff-file-head' }, toggle, counts(e.a, e.d), bars(e.a, e.d), h('span', { class: 'diff-name' }, link), badges,
+          h('span', { class: 'spacer' }), h('label', { class: 'viewed' }, box, ' Viewed')));
       var body = h('div', { class: 'diff-body', id: bodyId });
       section.appendChild(body);
       var c = { entry: e, section: section, body: body, toggle: toggle, box: box, built: false, treeLink: null, link: link };
@@ -639,9 +664,9 @@
     }
     wrap.appendChild(banners);
     wrap.appendChild(layout);
-    /* the tree starts hidden on a phone, and on a medium window when the split layout needs the room */
+    /* the tree starts hidden on a phone, and when it would leave less than MIN_HALF px for each half of the split layout */
     if (window.matchMedia && (window.matchMedia('(max-width: 860px)').matches ||
-        (effective() === 'split' && window.matchMedia('(max-width: 1099px)').matches))) setTree(false);
+        (effective() === 'split' && halfWidth(true) < MIN_HALF))) setTree(false);
     render(query.get('file'));
   }
 })();

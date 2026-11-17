@@ -184,6 +184,7 @@
     external: ['path:M9 2h5v5M14 2 7 9M12 10v4H2V4h4'],
     chevron: ['path:M4 6l4 4 4-4'],
     folder: ['path:M1.5 3.5h4.5l1.5 2h7v7.5h-13z'],
+    unfold: ['path:M5.5 5 8 2.5 10.5 5M5.5 11 8 13.5 10.5 11M2.5 8h11'],
     search: ['circle:7,7,4.5', 'path:M10.5 10.5 14 14']
   };
   LH.icon = function (name, cls) {
