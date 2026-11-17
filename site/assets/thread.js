@@ -1,6 +1,6 @@
 /* Thread page: a patch series (pull request) or a discussion (issue).
  *
- * data/threads/<list>/<shard>.json holds the metadata of every message (author, time, trailers, the index of
+ * data/threads/<list>/<shard>.json.gz holds the metadata of every message (author, time, trailers, the index of
  * the message it replies to) and data/bodies/<list>/<n>.json.gz the texts, in the same order:
  * the opening message (cover letter), the patches, the replies. */
 (function () {
@@ -297,7 +297,7 @@
     var n = parseInt(num, 10);
     LH.setTitle(list + ' #' + num);
     if (!(n > 0)) { LH.clear(app).appendChild(LH.errorBox(new Error('Bad thread number'), 'this thread')); return Promise.resolve(); }
-    return LH.getJSON('data/threads/' + encodeURIComponent(list) + '/' + Math.floor(n / SHARD) + '.json').then(function (shard) {
+    return LH.getGz('data/threads/' + encodeURIComponent(list) + '/' + Math.floor(n / SHARD) + '.json.gz').then(function (shard) {
       var d = shard[String(n)];
       if (!d) throw new Error('Thread #' + n + ' is not in the current build (it may have aged out of the window).');
       LH.setTitle(d.t + ' (' + list + ' #' + n + ')');

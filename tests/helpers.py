@@ -89,7 +89,7 @@ def site_texts(out):
 
 
 def thread_detail(out, home, n):
-    return jload(Path(out) / ("data/threads/%s/%d.json" % (home, n // 32)))[str(n)]
+    return jload(Path(out) / ("data/threads/%s/%d.json.gz" % (home, n // 32)))[str(n)]
 
 
 def thread_bodies(out, home, n):

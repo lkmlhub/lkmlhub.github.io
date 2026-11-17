@@ -10,6 +10,7 @@ from lorehub import search
 from lorehub.search import build_index, delta, fold, key_file, shard_key, tokenize
 
 from . import ipe_fixture
+from .helpers import jload
 
 NODE = shutil.which("node")
 CLI = Path(__file__).parent / "js" / "query_cli.js"
@@ -133,7 +134,7 @@ class IpeSearchTests(unittest.TestCase):
         self.assertEqual(v2["hl"], "kexec")
         self.assertEqual(v2["l"], "changes")
         self.assertEqual(v2["c"], 6)
-        shard = json.loads((self.out / "data/threads/kexec/0.json").read_text())
+        shard = jload(self.out / "data/threads/kexec/0.json.gz")
         self.assertEqual(shard[str(v2["n"])]["t"], v2["t"])
 
     def test_a_query_loads_only_a_few_small_shards(self):

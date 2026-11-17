@@ -10,7 +10,7 @@ from pathlib import Path
 
 RETENTION_DAYS = 180  # at least the backfill horizon; the effective value is max(this, configured horizon)
 BODY_DAYS = 60  # discussion bodies (series members always keep theirs)
-MAX_MSGS = 10000  # newest messages kept per list, keeps the busiest lists bounded
+MAX_MSGS = 3000  # newest messages outside the kept series (discussions, ...) per list, keeps the busiest lists bounded
 MAX_BODY_MSGS = 300  # newest discussion messages that keep a body
 MAX_DIFF_MSGS = 1000  # newest patch messages per list that keep a diff (whole series, newest first)
 STATE_EPOCH = 3  # bump when records or limits change so that old state is walked again, see migrate.py

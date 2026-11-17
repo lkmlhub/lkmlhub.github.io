@@ -196,9 +196,9 @@ class BuildDiffTests(unittest.TestCase):
 
     def test_diffs_never_appear_in_list_or_thread_json(self):
         st, out, _ = self.build(self.series())
-        for p in list((out / "data/lists").rglob("*.json")) + list((out / "data/threads").rglob("*.json")) + \
+        for p in list((out / "data/lists").rglob("*.json")) + list((out / "data/threads").rglob("*.json.gz")) + \
                 list((out / "data/authors").glob("*.json")) + [out / "data/lists.json", out / "data/recent.json"]:
-            t = p.read_text()
+            t = json.dumps(jload(p))
             self.assertNotIn("new line", t, p)
             self.assertNotIn("@@ -1,2", t, p)
 

@@ -45,7 +45,7 @@ class IpeAcceptanceTests(unittest.TestCase):
 
     def detail(self, row, list_name="linux-security-module"):
         home = row.get("hl", list_name)
-        shard = json.loads((self.out / ("data/threads/%s/%d.json" % (home, row["n"] // 32))).read_text())
+        shard = jload(self.out / ("data/threads/%s/%d.json.gz" % (home, row["n"] // 32)))
         return home, shard[str(row["n"])]
 
     def test_backfill_walked_every_list_back_through_search_windows(self):

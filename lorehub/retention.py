@@ -7,7 +7,7 @@ even when it alone is longer; the per patch and per series size caps of diff.py 
 else decides which diffs or bodies of a series exist, so the site never has half a series.
 
 Other messages (discussions, pull requests, replies whose patch is unknown) are only pruned by age and
-by a count cap, and only the newest few keep a body.
+by a count cap of their own (`max_msgs`), and only the newest few keep a body.
 """
 
 from dataclasses import dataclass
@@ -86,7 +86,7 @@ def enforce(data, name, now, lim=None):
     for mid in [m for m, r in msgs.items() if m not in protected and r["t"] < horizon]:
         remove(mid)
     free = [(r["t"], m) for m, r in msgs.items() if m not in protected]
-    room = max(0, lim.max_msgs - len(protected))
+    room = lim.max_msgs
     if len(free) > room:
         free.sort(reverse=True)
         for _, mid in free[room:]:

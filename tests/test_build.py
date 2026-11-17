@@ -10,7 +10,7 @@ from lorehub.build import build_site
 from lorehub.crawl import CacheSource, crawl
 from lorehub.state import State
 
-from .helpers import FIXTURES, NOW, make_state, raw
+from .helpers import FIXTURES, NOW, jload, make_state, raw
 
 EMAIL = re.compile(r"[A-Za-z0-9._%+=-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 quiet = lambda m: None  # noqa: E731
@@ -77,8 +77,8 @@ class SmokeTests(unittest.TestCase):
         for rel in ["index.html", "404.html", ".nojekyll", "favicon.svg", "assets/app.js", "assets/style.css",
                     "data/lists.json", "data/recent.json", "data/lists/lkml/meta.json", "data/lists/netdev/meta.json"]:
             self.assertTrue((self.out / rel).is_file(), rel)
-        self.assertTrue(list((self.out / "data/threads/lkml").glob("*.json")) or
-                        list((self.out / "data/threads/netdev").glob("*.json")))
+        self.assertTrue(list((self.out / "data/threads/lkml").glob("*.json.gz")) or
+                        list((self.out / "data/threads/netdev").glob("*.json.gz")))
         self.assertTrue(list((self.out / "data/authors").glob("*.json")))
 
     def test_all_json_parses(self):
@@ -117,7 +117,7 @@ class SmokeTests(unittest.TestCase):
             rows = json.loads((self.out / ("data/lists/lkml/%s-%s-0.json" % (kind, state))).read_text())["rows"]
             for r in rows[:20]:
                 home = r.get("hl", "lkml")
-                shard = json.loads((self.out / ("data/threads/%s/%d.json" % (home, r["n"] // 32))).read_text())
+                shard = jload(self.out / ("data/threads/%s/%d.json.gz" % (home, r["n"] // 32)))
                 self.assertIn(str(r["n"]), shard)
                 self.assertEqual(shard[str(r["n"])]["t"][:50], r["t"][:50])
                 checked += 1

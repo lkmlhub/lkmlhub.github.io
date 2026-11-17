@@ -36,7 +36,7 @@ PAGE_SIZE = 300
 SHARD = 32
 TOP_CONTRIBUTORS = 50
 MAX_AUTHOR_PROFILES = 4000
-MAX_ENTITIES = 300  # newest discussions published per list (patch series are limited by the stored diffs)
+MAX_ENTITIES = 100  # newest discussions published per list (patch series are limited by the stored diffs)
 SPARK_DAYS = 30
 STALE_AFTER = 6 * 3600
 MAX_SITE_MB = 700  # GitHub Pages allows 1 GB; this keeps a safety margin
@@ -523,7 +523,7 @@ def _build_once(state, out, now, names, base, log, save_numbers=True, max_entiti
         shards.setdefault((e.home, e.n // SHARD), {})[str(e.n)] = make_detail(
             e, msgs, diffs_by.get(id(e)) if e.kind == "pr" else None, shown_ids, now)
     for (home, idx), content in shards.items():
-        sz = write("threads/%s/%d.json" % (home, idx), content)
+        sz = write("threads/%s/%d.json.gz" % (home, idx), content, gz=True)
         shard_max = max(shard_max, sz)
         size_by_list[home] = size_by_list.get(home, 0) + sz
 

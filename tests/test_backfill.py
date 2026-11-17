@@ -12,7 +12,7 @@ from lorehub.crawl import _Empty, window_query, window_url
 from lorehub.fetch import FetchError
 from lorehub.state import State
 
-from .helpers import NOW, atom, raw
+from .helpers import NOW, atom, jload, raw
 
 DAY = 86400
 quiet = lambda m: None  # noqa: E731
@@ -349,7 +349,7 @@ class BackfilledHistoryTests(unittest.TestCase):
         self.assertEqual(oldest["sb"], 2)
         self.assertEqual(newest["nv"], 2)
         self.assertEqual((newest["c"], oldest["c"]), (1, 1))
-        shard = json.loads((out / ("data/threads/lsm/%d.json" % (newest["n"] // 32))).read_text())
+        shard = jload(out / ("data/threads/lsm/%d.json.gz" % (newest["n"] // 32)))
         detail = shard[str(newest["n"])]
         self.assertEqual(len(detail["vs"]), 2)
         self.assertEqual(detail["df"], 1)
