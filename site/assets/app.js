@@ -1,6 +1,7 @@
 /* Router and theme toggle. Routes are hash based so they work under any sub-path with no server support:
  *   #/                      home
  *   #/about                 about
+ *   #/search?q=<text>       search all lists
  *   #/u/<hash>              contributor
  *   #/<list>[/<tab>]        list, tab is patches|discussions|activity|contributors|about
  *   #/<list>/pr/<n>         patch series, #/<list>/issue/<n> discussion
@@ -26,6 +27,7 @@
     var done;
     if (!p.length) done = LH.renderHome(app);
     else if (p[0] === 'about' && p.length === 1) done = LH.renderAbout(app);
+    else if (p[0] === 'search' && p.length === 1) done = LH.renderSearch(app, r.query);
     else if (p[0] === 'u' && p.length === 2) done = LH.renderPerson(app, p[1]);
     else if (p.length === 3 && (p[1] === 'pr' || p[1] === 'issue')) done = LH.renderThread(app, p[0], p[1], p[2], r.query);
     else if (p.length <= 2) done = LH.renderList(app, p[0], p[1] || 'patches', r.query);
@@ -35,6 +37,14 @@
     }
     return done;
   }
+
+  var siteForm = document.getElementById('site-search-form');
+  var siteBox = document.getElementById('site-q');
+  siteForm.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var v = siteBox.value.trim();
+    location.hash = '#/search' + (v ? '?q=' + encodeURIComponent(v) : '');
+  });
 
   var first = true;
   function onRoute() {

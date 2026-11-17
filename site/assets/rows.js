@@ -6,11 +6,13 @@
   var KIND_WORD = { opened: 'opened', merged: 'merged', reviewed: 'reviewed', acked: 'acked', tested: 'tested', nacked: 'nacked' };
 
   /* One list row. list is the page's list name, used to build cross-list links. */
-  LH.threadRow = function (row, list) {
+  LH.threadRow = function (row, list, opts) {
+    opts = opts || {};
     var home = row.hl || list;
     var href = LH.threadHref(home, row.k, row.n);
     var title = h('a', { class: 'row-title', href: href }, row.t || '(no subject)');
     var tags = [];
+    if (opts.listChip) tags.push(LH.chip(home, LH.route(home), 'Open the ' + home + ' list'));
     tags.push(LH.pill(row.l));
     if (row.v && row.k === 'pr') tags.push(h('span', { class: 'chip chip-version', title: 'Series version' }, 'v' + row.v));
     if (row.nv) tags.push(h('span', { class: 'chip', title: 'Versions of this series seen' }, row.nv + ' versions'));
@@ -19,7 +21,7 @@
     (row.x || []).forEach(function (l) { tags.push(LH.chip(l, LH.route(l), 'Also posted to ' + l)); });
     if (row.pa) tags.push(h('span', { class: 'chip chip-partial', title: 'Some earlier messages are outside the 120 day window' }, 'partial'));
 
-    var parts = ['#' + row.n + (row.hl ? ' in ' + row.hl : '')];
+    var parts = ['#' + row.n + (row.hl && !opts.listChip ? ' in ' + row.hl : '')];
     var opened = row.a ? ['opened ', LH.timeEl(row.o), ' by ', h('a', { href: LH.authorHref(row.ah) }, row.a)]
       : ['first seen ', LH.timeEl(row.o)];
     parts.push(opened);

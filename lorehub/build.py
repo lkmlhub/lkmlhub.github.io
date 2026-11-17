@@ -13,6 +13,7 @@ from .feed import lore_url
 from .groups import group_colors, group_for
 from .model import (
     DAY,
+    LABELS,
     REVIEW_KINDS,
     build_entities,
     compute_status,
@@ -22,6 +23,7 @@ from .model import (
     review_summary,
     state_of,
 )
+from .search import build_index
 from .state import RETENTION_DAYS, StateError, day_of, dumps
 
 SITE_DIR = Path(__file__).resolve().parent.parent / "site"
@@ -448,6 +450,14 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
             break
     write("recent.json", {"generated": now, "events": recent})
 
+    search_bytes = 0
+    docs = [{"n": e.n, "l": e.home, "k": e.kind, "t": e.title, "a": e.author_name, "ah": e.author, "o": e.opened,
+             "u": e.updated, "lb": e.label, "c": len(e.comments), "v": e.version if e.kind == "pr" else 0,
+             "pt": [t for t in dict.fromkeys(m.subj.title or m.subj.raw for m in e.patches) if t != e.title],
+             "x": sorted(e.lists - {e.home}), "tg": e.tags} for e in published]
+    for rel, obj in build_index(docs, sorted({d["l"] for d in docs}), list(LABELS)).items():
+        search_bytes += write("search/" + rel, obj)
+
     profiles = _profiles(published, msgs, agg, now)
     shard_files = {}
     for h, p in profiles.items():
@@ -471,7 +481,8 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
     return {"lists": len(lists_json), "bytes": total, "messages": len(msgs), "threads": len(published),
             "size_by_list": size_by_list, "max_shard_bytes": shard_max, "cutoff": cutoff,
             "profiles": len(profiles), "pending": pending, "stale": stale, "trimmed": trimmed,
-            "diff_bytes": diff_bytes, "diff_series": len(diffs_by), "diff_evicted": diffs_evicted}
+            "diff_bytes": diff_bytes, "diff_series": len(diffs_by), "diff_evicted": diffs_evicted,
+            "search_bytes": search_bytes, "search_docs": len(docs)}
 
 
 def _profiles(entities, msgs, agg, now):

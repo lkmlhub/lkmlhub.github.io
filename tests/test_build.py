@@ -293,6 +293,7 @@ class XssBuildTests(unittest.TestCase):
             routes = ["", "xss/patches", "xss/pr/%d" % row["n"], "xss/pr/%d?tab=commits" % row["n"], files_url,
                       files_url + "&patch=1", files_url + "&file=" + quote(hostile_file, safe=""),
                       files_url + "&file=" + quote(self.PAYLOADS[1], safe=""),
+                      "search?q=PWNED", "search?q=" + quote(self.PAYLOADS[2], safe=""),
                       "xss/contributors", "xss/activity", "xss/about", "u/" + author]
             for route in routes:
                 url = "http://127.0.0.1:%d/#/%s" % (port, route)
@@ -303,13 +304,18 @@ class XssBuildTests(unittest.TestCase):
                 dom = res.stdout
                 self.assertIn("LoreHub", dom, route)
                 self.assertNotIn("<title>PWNED", dom, route)
-                self.assertNotIn("PWNED - LoreHub", dom, route)
+                if not route.startswith("search?q=PWNED"):  # there the page title legitimately echoes the query
+                    self.assertNotIn("PWNED - LoreHub", dom, route)
                 self.assertNotIn('<img src="x"', dom, route)
                 self.assertNotIn("<svg onload", dom, route)
                 self.assertNotIn('<script>document.title', dom, route)
                 self.assertNotIn('href="javascript:', dom, route)
                 if route.startswith("xss/pr/") and "commits" not in route:
                     self.assertIn("&lt;script&gt;document.title", dom, "payload should show up as escaped text")
+                if route == "search?q=PWNED":
+                    self.assertIn("&lt;script&gt;document.title", dom, route)
+                    self.assertIn("Search lore.kernel.org for this", dom, route)
+                    self.assertIn("https://lore.kernel.org/all/?q=PWNED", dom, route)
                 if "tab=files" in route:
                     self.assertIn('class="diff-table"', dom, route)
                     self.assertIn("&lt;img src=x onerror=", dom, route)
