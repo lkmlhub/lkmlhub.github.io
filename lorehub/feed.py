@@ -8,9 +8,10 @@ from urllib.parse import quote, unquote, urlparse
 from . import LORE
 from .diff import extract_diff, stat_of
 from .parse import (
+    BODY_VERSION,
     classify,
-    clean_body,
     extract_trailers,
+    full_body,
     parse_subject,
     person_hash,
     scrub_emails,
@@ -160,7 +161,11 @@ def to_record(raw, keep_body=True, diffs=None):
             if stat:
                 rec["ds"] = list(stat)
     if keep_body:
-        rec["b"] = clean_body(body)
+        text, cut = full_body(body, patch=subj.is_patch_message)
+        rec["b"] = text
+        rec["bv"] = BODY_VERSION
+        if cut:
+            rec["bt"] = 1
     return rec
 
 

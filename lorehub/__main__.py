@@ -6,9 +6,11 @@ import time
 
 from . import __version__
 from .backfill import Config, run_backfill as backfill_run
+from .complete import Config as CompleteConfig, run_completion
 from .crawl import CacheSource, LiveSource, crawl
 from .fetch import Fetcher
-from .state import State
+from .retention import Limits, effective_retention
+from .state import MAX_DIFF_MSGS, State
 
 
 def log(msg):
@@ -24,20 +26,28 @@ def add_common(p):
     p.add_argument("--lists", help="comma separated list names (default: all)")
 
 
-def add_backfill_args(p, default_days=90):
+def add_backfill_args(p, default_days=180):
     p.add_argument("--backfill-days", type=float, default=default_days,
                    help="history horizon in days for the backfill, 0 turns it off (default %g)" % default_days)
     p.add_argument("--backfill-min", type=float, default=12, help="backfill time budget per run in minutes")
     p.add_argument("--backfill-requests", type=int, default=900, help="max backfill requests per run")
-    p.add_argument("--backfill-total", type=int, default=4000, help="max backfill requests over all runs")
-    p.add_argument("--backfill-list-pages", type=int, default=25,
-                   help="max 200-entry pages per list, the busiest lists stop there")
+    p.add_argument("--backfill-total", type=int, default=12000, help="max backfill requests over all runs")
+    p.add_argument("--backfill-list-pages", type=int, default=60,
+                   help="max 200-entry pages per list (a safety cap, busy lists stop earlier when their newest "
+                        "1000 patches are stored)")
+    p.add_argument("--max-diff-msgs", type=int, default=MAX_DIFF_MSGS,
+                   help="patch messages per list that keep a diff, whole series newest first (default %d)" % MAX_DIFF_MSGS)
 
 
 def backfill_config(args, budget_s=None):
     return Config(days=args.backfill_days, budget_s=args.backfill_min * 60 if budget_s is None else budget_s,
                   max_requests=args.backfill_requests, max_total=args.backfill_total,
-                  list_pages=args.backfill_list_pages, keep_bodies=not getattr(args, "no_bodies", False))
+                  list_pages=args.backfill_list_pages, keep_bodies=not getattr(args, "no_bodies", False),
+                  fill_patches=int(args.max_diff_msgs * 1.1))
+
+
+def limits_of(args):
+    return Limits(retention_days=effective_retention(args.backfill_days), max_diff_msgs=args.max_diff_msgs)
 
 
 def add_crawl_args(p):
@@ -45,6 +55,9 @@ def add_crawl_args(p):
     p.add_argument("--deep-budget", type=int, default=12,
                    help="max search-atom requests per run to sweep gaps on busy lists (default 12, 0 = off)")
     p.add_argument("--deep-pages", type=int, default=2, help="max search pages per list per run")
+    p.add_argument("--complete-requests", type=int, default=300,
+                   help="max thread requests per run to complete the conversation of incomplete series (0 = off)")
+    p.add_argument("--complete-min", type=float, default=8, help="thread completion time budget per run in minutes")
     add_backfill_args(p)
     p.add_argument("--from-cache", help="replay raw feeds saved by --save-raw instead of fetching")
     p.add_argument("--save-raw", help="save raw HTTP responses into this directory")
@@ -54,8 +67,7 @@ def add_crawl_args(p):
 def add_build_args(p):
     p.add_argument("--out", default="public", help="output directory (default: public)")
     p.add_argument("--base", default="/", help="site base path, only used by 404.html (default /)")
-    p.add_argument("--max-site-mb", type=float, default=300, help="site size cap in MB")
-    p.add_argument("--diff-budget-mb", type=float, default=60, help="published diff budget in MB")
+    p.add_argument("--max-site-mb", type=float, default=700, help="site size cap in MB (whole series are left out above it)")
     p.add_argument("--now", type=int, help="override the current time (unix seconds)")
 
 
@@ -70,7 +82,7 @@ def run_crawl(args):
     summary = crawl(
         state, source, now, names=split_lists(args.lists), budget_s=args.budget_min * 60,
         deep_budget=args.deep_budget, deep_pages=args.deep_pages,
-        keep_bodies=not args.no_bodies, log=log,
+        keep_bodies=not args.no_bodies, log=log, limits=limits_of(args),
     )
     log("crawl summary: %s" % summary)
     if args.backfill_days > 0 and not summary["aborted"]:
@@ -79,9 +91,19 @@ def run_crawl(args):
         budget = min(args.backfill_min * 60, left)
         if budget >= 30:
             summary["backfill"] = backfill_run(state, source, now, backfill_config(args, budget),
-                                               names=split_lists(args.lists), log=log)
+                                               names=split_lists(args.lists), log=log, limits=limits_of(args))
         else:
             log("backfill skipped: the crawl used the whole time budget")
+    if args.complete_requests > 0 and not summary["aborted"] and not summary.get("backfill", {}).get("aborted"):
+        left = args.budget_min * 60 - (time.monotonic() - started)
+        budget = min(args.complete_min * 60, left)
+        touched = set(summary.get("touched", [])) | set(summary.get("backfill", {}).get("touched", []))
+        if budget >= 30:
+            summary["completion"] = run_completion(
+                state, source, now, CompleteConfig(max_requests=args.complete_requests, budget_s=budget),
+                names=split_lists(args.lists), touched=touched, log=log, limits=limits_of(args), days=args.backfill_days)
+        else:
+            log("thread completion skipped: the run used the whole time budget")
     return summary
 
 
@@ -91,7 +113,8 @@ def run_backfill(args):
     names = split_lists(args.lists)
     if args.backfill_days <= 0:
         sys.exit("--backfill-days must be positive")
-    return backfill_run(state, source, int(time.time()), backfill_config(args), names=names, log=log)
+    return backfill_run(state, source, int(time.time()), backfill_config(args), names=names, log=log,
+                        limits=limits_of(args))
 
 
 def run_build(args):
@@ -101,7 +124,7 @@ def run_build(args):
     now = args.now or int(time.time())
     report = build_site(
         state, args.out, now, names=split_lists(args.lists), base=args.base,
-        max_site_mb=args.max_site_mb, log=log, diff_budget=int(args.diff_budget_mb * 1e6),
+        max_site_mb=args.max_site_mb, log=log,
     )
     log("built %s: %d lists, %.1f MB" % (args.out, report["lists"], report["bytes"] / 1e6))
     return report

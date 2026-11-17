@@ -5,9 +5,11 @@ import json
 import os
 import shutil
 import time
+from collections import OrderedDict
 from pathlib import Path
 
-from .backfill import history_start, horizon_ts, is_done
+from .backfill import history_start, horizon_ts, is_done, stop_reason
+from .complete import coverage
 from .crawl import manifest_from_json
 from .diffshards import SERIES_CAP, cap_series, est_size, pick
 from .feed import lore_url
@@ -24,18 +26,25 @@ from .model import (
     review_summary,
     state_of,
 )
+from .parse import BODY_VERSION
+from .retention import effective_retention
 from .search import build_index
-from .state import RETENTION_DAYS, StateError, day_of, dumps
+from .state import StateError, day_of, dumps, gzip_bytes
 
 SITE_DIR = Path(__file__).resolve().parent.parent / "site"
 PAGE_SIZE = 300
 SHARD = 32
 TOP_CONTRIBUTORS = 50
 MAX_AUTHOR_PROFILES = 4000
-MAX_ENTITIES = 300  # newest threads published per list
+MAX_ENTITIES = 300  # newest discussions published per list (patch series are limited by the stored diffs)
 SPARK_DAYS = 30
 STALE_AFTER = 6 * 3600
-DIFF_BUDGET = 60_000_000  # bytes of published diff JSON for the whole site (estimate_size.py: keeps the site near 280 MB)
+MAX_SITE_MB = 700  # GitHub Pages allows 1 GB; this keeps a safety margin
+# Estimates used to choose series before anything is written (gzip of the JSON, see scripts/estimate_size.py)
+GZ_DIFF = 0.27
+GZ_BODY = 0.30
+LIGHT_PER_ENTITY = 2600  # rows, detail, search, profile share of one thread
+DIFF_BUDGET = None  # optional extra cap in bytes on diff and body files (tests, experiments)
 
 
 def pick_home(lists):
@@ -80,8 +89,6 @@ def make_row(e, list_name):
         if len(e.versions) > 1:
             r["nv"] = len(e.versions)
         r["p"] = e.total or len(e.patches)
-        if e.pull:
-            r["pu"] = 1
         rv = []
         for t in review_summary(e):
             if t["kind"] in REVIEW_KINDS and not t["carried"] and len(rv) < 4:
@@ -90,6 +97,8 @@ def make_row(e, list_name):
             r["rv"] = rv
         if e.superseded_by is not None:
             r["sb"] = e.superseded_by.version
+    if e.pull:
+        r["pu"] = 1
     if e.tags:
         r["tg"] = e.tags
     others = sorted(e.lists - {list_name})
@@ -100,20 +109,17 @@ def make_row(e, list_name):
     return r
 
 
-def body_out(m, cutoff, limit=None):
-    if not m.b or m.t < cutoff:
-        return ""
-    return m.b if limit is None or len(m.b) <= limit else m.b[:limit].rstrip() + "\n[truncated]"
+def has_body(m):
+    """A body is stored for the message (an empty body of the new format counts)."""
+    return bool(m.b) or m.bv >= BODY_VERSION
 
 
-def msg_out(m, home, cutoff, parent_name="", limit=None):
+def msg_out(m, home, parent_name="", pi=None):
+    """Message metadata for the thread detail. The text itself is in the bodies file (see bodies_out)."""
     o = {"a": m.a, "ah": m.h, "o": m.t, "mid": m.mid}
     ml = home if home in m.lists else sorted(m.lists)[0]
     if ml != home:
         o["ml"] = ml
-    b = body_out(m, cutoff, limit)
-    if b:
-        o["b"] = b
     if m.tr:
         o["tr"] = [t for t in m.tr if t[0] != "codev"]
     if m.ds:
@@ -122,6 +128,12 @@ def msg_out(m, home, cutoff, parent_name="", limit=None):
         o["f"] = m.f
     if parent_name:
         o["re"] = parent_name
+    if pi is not None:
+        o["pi"] = pi
+    if m.bt:
+        o["bt"] = 1
+    if has_body(m) and m.bv < BODY_VERSION:
+        o["lb"] = 1  # an older, trimmed copy: the complete text is fetched again by the walk
     return o
 
 
@@ -141,50 +153,80 @@ def diff_summary(e, diffs):
     return len(paths) + miss, add, rem
 
 
-def make_detail(e, msgs, cutoff, diffs=None):
-    by_mid = {m.mid: m for m in e.members}
-    first = e.cover or (e.patches[0] if e.patches else None)
+def thread_order(e):
+    """The messages of a thread in the order used by the detail JSON and the bodies file:
+    the opening message (the cover letter of a series, the first message of a discussion), the patches
+    of a series, then the replies. A series without a cover letter opens with its first patch."""
+    if e.kind == "pr":
+        first, middle = e.cover, list(e.patches)
+    else:
+        first, middle = e.cover or (e.patches[0] if e.patches else None), []
+    return first, ([first] if first is not None else []) + middle + list(e.comments)
+
+
+def bodies_out(order):
+    """Texts aligned with thread_order: the stored text, or None when none is kept."""
+    return {"b": [m.b if has_body(m) else None for m in order]}
+
+
+def make_detail(e, msgs, diffs=None, shown=None, now=0):
+    first, order = thread_order(e)
+    idx = {m.mid: i for i, m in enumerate(order)}
     d = {"k": e.kind, "n": e.n, "home": e.home, "t": e.title, "a": e.author_name, "ah": e.author,
          "o": e.opened, "u": e.updated, "l": e.label, "s": e.state, "lists": sorted(e.lists),
-         "tg": e.tags, "c": len(e.comments)}
+         "tg": e.tags, "c": len(e.comments), "mc": len(order)}
     if e.partial:
         d["pa"] = 1
     if e.kind == "pr":
         d["v"] = e.version
         d["total"] = e.total
-        if e.pull:
-            d["pu"] = 1
+    if e.pull:
+        d["pu"] = 1
     head_msg = msgs[e.root]
     hl = e.home if e.home in head_msg.lists else sorted(head_msg.lists)[0]
     d["lore"] = lore_url(hl, e.root)
     if first is not None:
-        d["cover"] = msg_out(first, e.home, cutoff)
-        if e.cover is None:
+        d["cover"] = msg_out(first, e.home)
+        if e.kind == "pr" and e.cover is None:
             d["cover"]["single"] = 1
     if e.kind == "pr":
-        d["patches"] = [
-            dict(msg_out(m, e.home, cutoff, limit=1800), i=m.subj.index or 1, t=m.subj.title or m.subj.raw)
-            for m in e.patches
-        ]
-        if e.patches and not e.pull:
-            fc, fa, fd = diff_summary(e, diffs)
-            if fc:
-                d["fc"], d["fa"], d["fd"] = fc, fa, fd
-            if diffs:
-                d["df"] = 1
+        d["patches"] = []
+        for m in e.patches:
+            par = msgs.get(m.p)
+            p = dict(msg_out(m, e.home, par.a if par and par.mid in idx else "", idx.get(m.p)),
+                     i=m.subj.index or 1, t=m.subj.title or m.subj.raw)
+            if diffs is not None and m.mid not in diffs:
+                p["nd"] = 1  # the diff of this patch is not stored
+            d["patches"].append(p)
+        fc, fa, fd = diff_summary(e, diffs)
+        if fc:
+            d["fc"], d["fa"], d["fd"] = fc, fa, fd
+        if diffs:
+            d["df"] = 1
+        d["cp"], gaps = coverage(e, msgs, now)
+        if gaps:
+            d["gp"] = gaps
     d["cm"] = []
     for m in e.comments:
         par = msgs.get(m.p)
-        d["cm"].append(msg_out(m, e.home, cutoff, par.a if par and par.mid in by_mid else ""))
+        known = par is not None and par.mid in idx
+        d["cm"].append(msg_out(m, e.home, par.a if known else "", idx.get(m.p) if known else None))
     d["rv"] = review_summary(e)
-    if len(e.versions) > 1:
-        d["vs"] = [
-            {"n": v.n, "home": v.home, "v": v.version, "o": v.opened, "l": v.label, "rs": int(v.resend)}
-            for v in e.versions
-        ]
-    if e.superseded_by is not None:
-        s = e.superseded_by
-        d["sb"] = {"n": s.n, "home": s.home, "v": s.version}
+    if shown is not None and e.kind == "pr":
+        chain = [v for v in e.versions if id(v) in shown]
+        if len(chain) > 1:
+            d["vs"] = [
+                {"n": v.n, "home": v.home, "v": v.version, "o": v.opened, "l": v.label, "rs": int(v.resend),
+                 "c": len(v.comments)}
+                for v in chain
+            ]
+        newer = [v for v in e.versions if v.version > e.version or (v.version == e.version and v.opened > e.opened)]
+        newer_shown = [v for v in newer if id(v) in shown]
+        if newer_shown:
+            s = newer_shown[0]
+            d["sb"] = {"n": s.n, "home": s.home, "v": s.version}
+        elif e.superseded_by is not None:
+            d["sbh"] = e.superseded_by.version  # superseded by a version that is not shown (no diff stored)
     return d
 
 
@@ -207,72 +249,68 @@ def make_events(e):
     return ev
 
 
-def build_site(state, out, now, names=None, base="/", max_site_mb=300, log=print, max_entities=MAX_ENTITIES,
+def build_site(state, out, now, names=None, base="/", max_site_mb=MAX_SITE_MB, log=print, max_entities=MAX_ENTITIES,
                diff_budget=DIFF_BUDGET):
+    """Build the site. When it is over `max_site_mb` whole series are left out, oldest closed ones first."""
     cap = int(max_site_mb * 1e6)
-    budget = int(cap * 0.35)
-    report = None
+    shrink, scale, report = 0, 1.0, None
     for attempt in range(4):
-        report = _build_once(state, out, now, names, base, budget, log, save_numbers=(attempt == 0),
-                             max_entities=max_entities, diff_budget=diff_budget)
+        report = _build_once(state, out, now, names, base, log, save_numbers=(attempt == 0), max_entities=max_entities,
+                             cap=cap, shrink=shrink, scale=scale, diff_budget=diff_budget)
         if report["bytes"] <= cap:
             break
-        log("site is %.1f MB, over the %.0f MB cap: lowering the body budget" % (report["bytes"] / 1e6, max_site_mb))
-        budget //= 2
-        max_entities //= 2
-        diff_budget //= 2
+        over = report["bytes"] - cap
+        log("site is %.1f MB, over the %.0f MB cap: leaving out whole series (%.1f MB)" % (report["bytes"] / 1e6, max_site_mb, over / 1e6))
+        shrink += int(over * 1.1) + 1
+        if report.get("est_heavy") and report.get("heavy_bytes"):
+            scale *= max(0.5, min(2.0, report["heavy_bytes"] / report["est_heavy"]))
     report["over_cap"] = report["bytes"] > cap
     return report
 
 
-def select_diffs(state, published, diff_budget, log):
-    """Pick the series whose diffs are published and load them: {id(entity): {message-id: diff}}."""
-    days = {}
-    cands, have_by = [], {}
-    for e in published:
-        if e.kind != "pr" or e.pull or e.ghost:
-            continue
-        have = []
-        for m in e.patches:
-            if m.dz is None or not m.dl:
-                continue
-            if m.dl not in days:
-                days[m.dl] = set(state.diff_days(m.dl))
-            if day_of(m.t) in days[m.dl]:
-                have.append(m)
-        if have:
-            have_by[id(e)] = have
-            cands.append((e.home, e.state, e.updated, est_size(sum(m.dz for m in have), len(have)), id(e)))
-    chosen = pick(cands, diff_budget)
-    need = {}
-    for e in published:
-        if id(e) in chosen:
-            for m in have_by[id(e)]:
-                need.setdefault((m.dl, day_of(m.t)), set()).add(m.mid)
-    store = {}
-    for (name, day), mids in sorted(need.items()):
-        try:
-            data = state.load_diff_day(name, day)
-        except StateError as err:
-            log("skipping unreadable diffs: %s" % err)
-            continue
-        for mid in mids:
-            if mid in data:
-                store[mid] = data[mid]
-    out = {}
-    for e in published:
-        if id(e) in chosen:
-            capped = cap_series([store.get(m.mid) for m in e.patches], SERIES_CAP)
-            got = {m.mid: d for m, d in zip(e.patches, capped) if d is not None}
-            if got:
-                out[id(e)] = got
-    return out, len(cands) - len(chosen)
+class DiffReader:
+    """Loads diff day files one at a time with a small LRU cache (a series' patches sit in one or two days)."""
+
+    def __init__(self, state, size=4, log=print):
+        self.state, self.size, self.log = state, size, log
+        self.cache = OrderedDict()
+        self.days = {}
+
+    def has(self, m):
+        """True when the stored diff of patch message m exists on disk (its record says so and the day file is there)."""
+        if m.dz is None or not m.dl:
+            return False
+        if m.dl not in self.days:
+            self.days[m.dl] = set(self.state.diff_days(m.dl))
+        return day_of(m.t) in self.days[m.dl]
+
+    def get(self, m):
+        key = (m.dl, day_of(m.t))
+        if key not in self.cache:
+            try:
+                self.cache[key] = self.state.load_diff_day(*key)
+            except StateError as err:
+                self.log("skipping unreadable diffs: %s" % err)
+                self.cache[key] = {}
+            while len(self.cache) > self.size:
+                self.cache.popitem(last=False)
+        else:
+            self.cache.move_to_end(key)
+        return self.cache[key].get(m.mid)
 
 
-def _build_once(state, out, now, names, base, body_budget, log, save_numbers=True, max_entities=MAX_ENTITIES,
-                diff_budget=DIFF_BUDGET):
+def est_series(e, have):
+    """Estimated bytes on the site of a series: gzip of its diff shard and bodies file, plus the light JSON."""
+    diff = est_size(sum(m.dz for m in have), len(have))
+    body = sum(len(m.b) + 60 for m in e.members)
+    return diff * GZ_DIFF, body * GZ_BODY + LIGHT_PER_ENTITY
+
+
+def _build_once(state, out, now, names, base, log, save_numbers=True, max_entities=MAX_ENTITIES, cap=MAX_SITE_MB * 10**6,
+                shrink=0, scale=1.0, diff_budget=DIFF_BUDGET):
     manifest = manifest_from_json(state.load_manifest())
-    meta = state.load_meta().get("lists", {})
+    full_meta = state.load_meta()
+    meta = full_meta.get("lists", {})
     have_state = set(state.list_names())
     if names:
         listed = sorted(n for n in names if n in manifest or n in have_state)
@@ -293,29 +331,9 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
     if save_numbers:
         state.save_numbers(numbers)
 
-    # publish at most max_entities newest threads per list (a thread is kept if any of its lists keeps it)
-    per_list = {}
-    for e in entities:
-        for l in e.lists:
-            per_list.setdefault(l, []).append(e)
-    keep_ids, totals_by_list, list_keep = set(), {}, {}
-    for l, es in per_list.items():
-        es.sort(key=lambda e: (-e.opened, e.head))
-        totals_by_list[l] = len(es)
-        list_keep[l] = {id(e) for e in es[:max_entities]}
-        keep_ids.update(list_keep[l])
-    published = [e for e in entities if id(e) in keep_ids]
-    trimmed = len(entities) - len(published)
-
-    # bodies: keep the newest ones that fit in the size budget
-    total, cutoff = 0, 0
-    for t, n in sorted(((m.t, len(m.b)) for m in msgs.values() if m.b), reverse=True):
-        total += n + 60
-        if total > body_budget:
-            cutoff = t + 1
-            break
-
-    diffs_by, diffs_evicted = select_diffs(state, published, diff_budget, log)
+    bfm = full_meta.get("backfill", {})
+    bf_days = bfm.get("days") or 0
+    window = effective_retention(bf_days)
 
     tmp = Path(str(out) + ".new")
     if tmp.exists():
@@ -323,59 +341,122 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
     tmp.mkdir(parents=True)
     data = tmp / "data"
 
-    def write(rel, obj):
+    def write(rel, obj, gz=False):
         path = data / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(dumps(obj))
+        path.write_bytes(gzip_bytes(dumps(obj)) if gz else dumps(obj))
         return path.stat().st_size
 
-    # per list aggregates, from the messages each list itself holds
-    day0 = (now // DAY) * DAY - (RETENTION_DAYS - 1) * DAY
-    agg = {}
-    for m in msgs.values():
-        patch = m.subj.is_patch_message and not m.subj.is_cover
-        review = any(t[0] in REVIEW_KINDS for t in m.tr) and not m.subj.is_patch_message
-        for l in m.lists:
-            a = agg.setdefault(l, {"days": {}, "auth": {}, "last": 0, "first": m.t, "msgs": 0, "m30": 0})
-            a["msgs"] += 1
-            a["last"] = max(a["last"], m.t)
-            a["first"] = min(a["first"], m.t)
-            di = (m.t - day0) // DAY
-            if 0 <= di < RETENTION_DAYS:
-                d = a["days"].setdefault(di, [0, set()])
-                d[0] += 1
-                d[1].add(m.h)
-            if now - m.t <= SPARK_DAYS * DAY:
-                a["m30"] += 1
-            c = a["auth"].setdefault(m.h, {"h": m.h, "name": m.a, "m": 0, "p": 0, "r": 0, "v": 0, "t": 0})
-            c["m"] += 1
-            if m.t >= c["t"]:
-                c["t"], c["name"] = m.t, m.a
-            if patch:
-                c["p"] += 1
-            elif not m.subj.is_patch_message:
-                c["r"] += 1
-            if review:
-                c["v"] += 1
+    # patch series: only those with a stored diff are shown. Choose them (whole series) within the size budget.
+    reader = DiffReader(state, log=log)
+    discussions = [e for e in entities if e.kind == "issue"]
+    cands, have_by, ent_by = [], {}, {}
+    for e in entities:
+        if e.kind != "pr" or e.ghost or not e.patches:
+            continue
+        have = [m for m in e.patches if reader.has(m)]
+        if have:
+            have_by[id(e)], ent_by[id(e)] = have, e
+            d_est, b_est = est_series(e, have)
+            cands.append((e.home, e.state, e.updated, int((d_est + b_est) * scale), id(e)))
+    per_list = {}
+    for e in discussions:
+        for l in e.lists:
+            per_list.setdefault(l, []).append(e)
+    keep_ids, list_keep = set(), {}
+    for l, es in per_list.items():
+        es.sort(key=lambda e: (-e.opened, e.head))
+        list_keep[l] = {id(e) for e in es[:max_entities]}
+        keep_ids.update(list_keep[l])
+    shown_disc = [e for e in discussions if id(e) in keep_ids]
+    disc_cost = sum(LIGHT_PER_ENTITY + (sum(len(m.b) + 60 for m in e.members) * GZ_BODY) for e in shown_disc) * scale
+    budget = cap - 600_000 - int(disc_cost) - shrink
+    if diff_budget is not None:
+        budget = min(budget, diff_budget)
+    chosen = pick(cands, max(0, budget))
+    evicted = len(cands) - len(chosen)
 
-    rows, events_by_list, all_events = {}, {}, []
+    diffs_by, shown_prs, heavy_bytes, no_files, size_by_list = {}, [], 0, 0, {}
+    order = sorted((ent_by[k] for k in chosen), key=lambda e: (have_by[id(e)][0].dl, have_by[id(e)][0].t))
+    for e in order:
+        got = {m.mid: reader.get(m) for m in have_by[id(e)]}
+        capped = cap_series([got.get(m.mid) for m in e.patches], SERIES_CAP)
+        got = {m.mid: d for m, d in zip(e.patches, capped) if d is not None}
+        if not any(d["f"] for d in got.values()):
+            no_files += 1
+            continue
+        diffs_by[id(e)] = got
+        shown_prs.append(e)
+        sz = write("diffs/%s/%d.json.gz" % (e.home, e.n), {"p": got}, gz=True)
+        sz += write("bodies/%s/%d.json.gz" % (e.home, e.n), bodies_out(thread_order(e)[1]), gz=True)
+        heavy_bytes += sz
+        size_by_list[e.home] = size_by_list.get(e.home, 0) + sz
+    shown_ids = {id(e) for e in shown_prs}
+    est_heavy = sum(int(c[3]) for c in cands if c[4] in chosen) - LIGHT_PER_ENTITY * len(chosen)
+    for e in shown_disc:
+        sz = write("bodies/%s/%d.json.gz" % (e.home, e.n), bodies_out(thread_order(e)[1]), gz=True)
+        heavy_bytes += sz
+        est_heavy += int(sum(len(m.b) + 60 for m in e.members) * GZ_BODY * scale)
+        size_by_list[e.home] = size_by_list.get(e.home, 0) + sz
+    published = shown_prs + shown_disc
+    trimmed = len(discussions) - len(shown_disc)
+    log("showing %d patch series (%d left out for size, %d without files) and %d discussions" % (
+        len(shown_prs), evicted, no_files, len(shown_disc)))
+
+    def kept(e, l):
+        return e.kind == "pr" or id(e) in list_keep.get(l, ())
+
+    # per list aggregates, from the messages that are shown
+    day0 = (now // DAY) * DAY - (window - 1) * DAY
+    agg = {}
+    shown_msgs = {}
+    for e in published:
+        for m in e.members:
+            shown_msgs[m.mid] = m
+            patch = m.subj.is_patch_message and not m.subj.is_cover
+            review = any(t[0] in REVIEW_KINDS for t in m.tr) and not m.subj.is_patch_message
+            for l in m.lists:
+                if not kept(e, l):
+                    continue
+                a = agg.setdefault(l, {"days": {}, "auth": {}, "last": 0, "first": m.t, "msgs": 0, "m30": 0})
+                a["msgs"] += 1
+                a["last"] = max(a["last"], m.t)
+                a["first"] = min(a["first"], m.t)
+                di = (m.t - day0) // DAY
+                if 0 <= di < window:
+                    d = a["days"].setdefault(di, [0, set()])
+                    d[0] += 1
+                    d[1].add(m.h)
+                if now - m.t <= SPARK_DAYS * DAY:
+                    a["m30"] += 1
+                c = a["auth"].setdefault(m.h, {"h": m.h, "name": m.a, "m": 0, "p": 0, "r": 0, "v": 0, "t": 0})
+                c["m"] += 1
+                if m.t >= c["t"]:
+                    c["t"], c["name"] = m.t, m.a
+                if patch:
+                    c["p"] += 1
+                elif not m.subj.is_patch_message:
+                    c["r"] += 1
+                if review:
+                    c["v"] += 1
+
+    rows, events_by_list, all_events, totals_by_list = {}, {}, [], {}
     for e in published:
         evs = make_events(e)
         all_events.extend(evs)
         for l in e.lists:
-            if id(e) not in list_keep[l]:
+            if not kept(e, l):
                 continue
             rows.setdefault(l, []).append(make_row(e, l))
             events_by_list.setdefault(l, []).extend(evs)
+            totals_by_list[l] = totals_by_list.get(l, 0) + 1
 
-    bfm = state.load_meta().get("backfill", {})
-    bf_days = bfm.get("days") or 0
     hz = horizon_ts(now, bf_days) if bf_days else 0
     bf_done = 0
     colors = group_colors()
     lists_json = []
-    size_by_list = {}
     shard_max = 0
+    waiting = sum(len(m.get("cq", [])) for m in meta.values())
     for name in listed:
         info = manifest.get(name)
         st = meta.get(name, {})
@@ -397,8 +478,8 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
             for i, chunk in enumerate(chunks):
                 sz += write("lists/%s/%s-%s-%d.json" % (name, k, s, i), {"rows": chunk})
         days = a["days"] if a else {}
-        daily = {"start": day0, "msgs": [days.get(i, [0, ()])[0] for i in range(RETENTION_DAYS)],
-                 "authors": [len(days.get(i, [0, ()])[1]) for i in range(RETENTION_DAYS)]}
+        daily = {"start": day0, "msgs": [days.get(i, [0, ()])[0] for i in range(window)],
+                 "authors": [len(days.get(i, [0, ()])[1]) for i in range(window)]}
         contributors = sorted(a["auth"].values(), key=lambda c: (-c["m"], c["name"]))[:TOP_CONTRIBUTORS] if a else []
         ev = sorted(events_by_list.get(name, []), key=lambda x: -x["ts"])[:60]
         fresh = st.get("checked") and now - st["checked"] <= STALE_AFTER
@@ -412,8 +493,9 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
         bf = st.get("bf") or {}
         hc = None
         if bf and bf_days:
-            hc = 1 if is_done(bf, hz) and not bf.get("cap") else 2 if bf.get("done") and bf.get("cap") else 0
-            bf_done += hc == 1
+            finished = is_done(bf, hz)
+            hc = ({"": 1, "cap": 2, "fill": 3}[stop_reason(bf)]) if finished else 0
+            bf_done += finished
         hs = (history_start(bf, hz) if bf and bf_days else 0) or (a["first"] if a else 0)
         last = (a["last"] if a else 0) or (info.modified if info else 0)
         lm = {
@@ -421,12 +503,12 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
             "pages": pages, "pagesize": PAGE_SIZE, "daily": daily, "contributors": contributors,
             "events": ev, "crawl": crawl, "checked": st.get("checked", 0), "err": st.get("err", ""),
             "last": last, "msgs": a["msgs"] if a else 0, "threads_total": totals_by_list.get(name, 0),
-            "epochs": info.epochs if info else [], "window_days": RETENTION_DAYS, "hs": hs,
+            "epochs": info.epochs if info else [], "window_days": window, "hs": hs,
         }
         if hc is not None:
             lm["hc"] = hc
         sz += write("lists/%s/meta.json" % name, lm)
-        size_by_list[name] = sz
+        size_by_list[name] = size_by_list.get(name, 0) + sz
         lists_json.append({
             "n": name, "d": desc, "g": group, "sp": daily["msgs"][-SPARK_DAYS:], "open": counts["pr"]["open"],
             "disc": counts["issue"]["open"], "la": last, "m30": a["m30"] if a else 0,
@@ -435,19 +517,11 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
         if hc is not None:
             lists_json[-1]["hc"] = hc
 
-    # diffs: one lazily loaded file per series, only fetched when the Files tab is opened
-    diff_bytes = 0
-    for e in published:
-        got = diffs_by.get(id(e))
-        if got:
-            sz = write("diffs/%s/%d.json" % (e.home, e.n), {"p": got})
-            diff_bytes += sz
-            size_by_list[e.home] = size_by_list.get(e.home, 0) + sz
-
-    # thread detail, sharded by number within the home list
+    # thread detail (no message text, see bodies/), sharded by number within the home list
     shards = {}
     for e in published:
-        shards.setdefault((e.home, e.n // SHARD), {})[str(e.n)] = make_detail(e, msgs, cutoff, diffs_by.get(id(e)))
+        shards.setdefault((e.home, e.n // SHARD), {})[str(e.n)] = make_detail(
+            e, msgs, diffs_by.get(id(e)) if e.kind == "pr" else None, shown_ids, now)
     for (home, idx), content in shards.items():
         sz = write("threads/%s/%d.json" % (home, idx), content)
         shard_max = max(shard_max, sz)
@@ -474,7 +548,7 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
     for rel, obj in build_index(docs, sorted({d["l"] for d in docs}), list(LABELS)).items():
         search_bytes += write("search/" + rel, obj)
 
-    profiles = _profiles(published, msgs, agg, now)
+    profiles = _profiles(published, agg, now)
     shard_files = {}
     for h, p in profiles.items():
         shard_files.setdefault(h[:2], {})[h] = p
@@ -483,12 +557,14 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
 
     pending = sum(1 for l in lists_json if l["st"] == "pending")
     stale = sum(1 for l in lists_json if l["st"] == "stale")
+    rebuild = bfm.get("rebuild")
     write("lists.json", {
-        "generated": now, "lists": lists_json, "groups": colors, "window_days": RETENTION_DAYS,
+        "generated": now, "lists": lists_json, "groups": colors, "window_days": window,
         "totals": {"lists": len(lists_json), "pending": pending, "stale": stale,
-                   "messages": len(msgs), "threads": len(published)},
+                   "messages": len(shown_msgs), "threads": len(published)},
         "backfill": {"days": bf_days, "horizon": hz, "done": bf_done, "lists": len(lists_json),
-                     "requests": bfm.get("requests", 0)},
+                     "requests": bfm.get("requests", 0), "rebuild": 1 if rebuild and bf_done < len(lists_json) else 0,
+                     "waiting": waiting},
     })
 
     _write_shell(tmp, SITE_DIR, lists_json, base, now)
@@ -496,26 +572,29 @@ def _build_once(state, out, now, names, base, body_budget, log, save_numbers=Tru
     if Path(out).exists():
         shutil.rmtree(out)
     os.replace(tmp, out)
-    return {"lists": len(lists_json), "bytes": total, "messages": len(msgs), "threads": len(published),
-            "size_by_list": size_by_list, "max_shard_bytes": shard_max, "cutoff": cutoff,
-            "profiles": len(profiles), "pending": pending, "stale": stale, "trimmed": trimmed,
-            "diff_bytes": diff_bytes, "diff_series": len(diffs_by), "diff_evicted": diffs_evicted,
+    return {"lists": len(lists_json), "bytes": total, "messages": len(shown_msgs), "threads": len(published),
+            "size_by_list": size_by_list, "max_shard_bytes": shard_max, "profiles": len(profiles),
+            "pending": pending, "stale": stale, "trimmed": trimmed, "heavy_bytes": heavy_bytes,
+            "est_heavy": est_heavy, "diff_bytes": heavy_bytes, "diff_series": len(shown_prs), "diff_evicted": evicted,
+            "series": len(shown_prs), "series_left_out": evicted, "discussions": len(shown_disc),
             "search_bytes": search_bytes, "search_docs": len(docs)}
 
 
-def _profiles(entities, msgs, agg, now):
-    """Bounded set of contributor profiles: recently active authors plus every list's top authors."""
+def _profiles(entities, agg, now):
+    """Bounded set of contributor profiles from the messages that are shown: recently active authors plus every
+    list's top authors."""
     recent_count, names, per_list = {}, {}, {}
-    for m in msgs.values():
-        if not m.h:
-            continue
-        if m.h not in names or m.t >= names[m.h][0]:
-            names[m.h] = (m.t, m.a)
-        if now - m.t <= 30 * DAY:
-            recent_count[m.h] = recent_count.get(m.h, 0) + 1
-        pl = per_list.setdefault(m.h, {})
-        for l in m.lists:
-            pl[l] = pl.get(l, 0) + 1
+    for e in entities:
+        for m in e.members:
+            if not m.h:
+                continue
+            if m.h not in names or m.t >= names[m.h][0]:
+                names[m.h] = (m.t, m.a)
+            if now - m.t <= 30 * DAY:
+                recent_count[m.h] = recent_count.get(m.h, 0) + 1
+            pl = per_list.setdefault(m.h, {})
+            for l in m.lists:
+                pl[l] = pl.get(l, 0) + 1
     keep = set(sorted(recent_count, key=lambda h: -recent_count[h])[:MAX_AUTHOR_PROFILES])
     for a in agg.values():
         keep.update(sorted(a["auth"], key=lambda h: -a["auth"][h]["m"])[:TOP_CONTRIBUTORS])

@@ -317,9 +317,8 @@ STAT_SUMMARY_RE = re.compile(
     r"(\d+) files? changed(?:, (\d+) insertions?\(\+\))?(?:, (\d+) deletions?\(-\))?"
 )
 STAT_LINE_RE = re.compile(r"^\s*\S.*\|\s+\d+\s*[+-]*\s*$")
-MAX_BODY_BYTES = 6144
-QUOTE_KEEP_HEAD = 2
-QUOTE_KEEP_TAIL = 4
+MAX_BODY_BYTES = 128 * 1024  # per message; longer bodies are cut at a line and flagged
+BODY_VERSION = 3  # records with a complete body carry "bv": 3; older (trimmed) records do not
 
 
 def split_diff(text):
@@ -363,47 +362,24 @@ def split_diff(text):
     return "\n".join(head).rstrip() + "\n", stat
 
 
-def collapse_quotes(text):
-    out = []
-    lines = text.splitlines()
-    i = 0
-    n = len(lines)
-    while i < n:
-        if not is_quoted(lines[i]):
-            out.append(lines[i])
-            i += 1
-            continue
-        j = i
-        while j < n and (is_quoted(lines[j]) or (not lines[j].strip() and j + 1 < n and is_quoted(lines[j + 1]))):
-            j += 1
-        block = lines[i:j]
-        followed = j < n
-        if len(block) <= QUOTE_KEEP_HEAD + QUOTE_KEEP_TAIL + 2:
-            out.extend(block)
-        elif followed:
-            out.extend(block[:QUOTE_KEEP_HEAD])
-            out.append("> [...]")
-            out.extend(block[-QUOTE_KEEP_TAIL:])
-        else:
-            out.extend(block[:QUOTE_KEEP_HEAD + 1])
-            out.append("> [...]")
-        i = j
-    return "\n".join(out)
+def full_body(text, patch=False, max_bytes=MAX_BODY_BYTES):
+    """The complete text of a message for storage: (body, truncated).
 
-
-def clean_body(text, max_bytes=MAX_BODY_BYTES):
-    """Trim a raw body for storage: no diff, collapsed quotes, no emails, size capped."""
+    Quoted lines, trailers and signatures are all kept. The only things removed are e-mail addresses,
+    trailing white space, runs of blank lines and, for a patch message, the diff (stored separately,
+    see diff.py). A body above `max_bytes` is cut at a line boundary and flagged.
+    """
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text = "\n".join(ln.rstrip() for ln in text.split("\n"))
-    text, _ = split_diff(text)
-    text = collapse_quotes(text)
+    if patch:
+        text, _ = split_diff(text)
     text = re.sub(r"\n{3,}", "\n\n", text).strip("\n")
     text = scrub_emails(text)
     raw = text.encode("utf-8")
-    if len(raw) > max_bytes:
-        cut = raw[:max_bytes].decode("utf-8", "ignore")
-        nl = cut.rfind("\n")
-        if nl > max_bytes // 2:
-            cut = cut[:nl]
-        text = cut.rstrip() + "\n[truncated]"
-    return text
+    if len(raw) <= max_bytes:
+        return text, False
+    cut = raw[:max_bytes].decode("utf-8", "ignore")
+    nl = cut.rfind("\n")
+    if nl > max_bytes // 2:
+        cut = cut[:nl]
+    return cut.rstrip(), True

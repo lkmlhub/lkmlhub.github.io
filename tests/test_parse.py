@@ -1,7 +1,7 @@
 import unittest
 
 from lorehub.parse import (
-    classify, clean_body, extract_trailers, looks_applied, norm_title, parse_subject,
+    classify, extract_trailers, full_body, looks_applied, norm_title, parse_subject,
     person_hash, scrub_emails, split_diff,
 )
 
@@ -111,19 +111,33 @@ class BodyTests(unittest.TestCase):
         self.assertNotIn("drivers/x.c", text)
         self.assertIn("Fix the thing.", text)
 
-    def test_clean_body_scrubs_and_caps(self):
+    def test_full_body_scrubs_and_flags_truncation(self):
         body = "Hi\n> From: Someone <someone@example.test>\n" + "word " * 5000
-        out = clean_body(body, max_bytes=500)
+        out, cut = full_body(body, max_bytes=500)
         self.assertNotIn("someone@example.test", out)
-        self.assertLessEqual(len(out.encode()), 500 + 20)
-        self.assertTrue(out.endswith("[truncated]"))
+        self.assertLessEqual(len(out.encode()), 500)
+        self.assertTrue(cut)
+        out, cut = full_body(body)
+        self.assertFalse(cut)
+        self.assertIn("word word", out)
 
-    def test_collapse_long_quotes(self):
-        body = "\n".join("> line %d" % i for i in range(30)) + "\nmy comment here ok\n"
-        out = clean_body(body)
-        self.assertIn("> [...]", out)
-        self.assertIn("my comment here ok", out)
-        self.assertLess(out.count("\n"), 12)
+    def test_full_body_keeps_every_quoted_line_and_the_trailers(self):
+        quoted = "\n".join("> line %d" % i for i in range(120))
+        body = "On Monday X wrote:\n" + quoted + "\n\nLooks good.\n\nReviewed-by: Jane Roe <jane@example.test>\n-- \nsig\n"
+        out, cut = full_body(body)
+        self.assertFalse(cut)
+        for i in range(120):
+            self.assertIn("> line %d\n" % i if i < 119 else "> line 119", out)
+        self.assertNotIn("[...]", out)
+        self.assertIn("Reviewed-by: Jane Roe\n", out)
+        self.assertTrue(out.endswith("sig"))
+
+    def test_full_body_of_a_patch_message_drops_only_the_diff(self):
+        out, cut = full_body(self.DIFF, patch=True)
+        self.assertIn("Fix the thing.", out)
+        self.assertNotIn("diff --git", out)
+        out, _ = full_body(self.DIFF, patch=False)  # a reply keeps an inline diff
+        self.assertIn("diff --git", out)
 
     def test_scrub_emails(self):
         self.assertEqual(scrub_emails("Jane <jane@example.test> wrote"), "Jane wrote")

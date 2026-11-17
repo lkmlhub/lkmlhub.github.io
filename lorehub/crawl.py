@@ -10,7 +10,9 @@ from . import LORE
 from .feed import parse_feed, to_record
 from .fetch import FetchError
 from .manifest import ListInfo, parse_manifest
-from .state import StateError, apply_diffs, merge_records
+from .migrate import migrate
+from .retention import Limits, finalize_list
+from .state import RETENTION_DAYS, StateError, merge_records, stash_diffs
 
 MANIFEST_URL = LORE + "/manifest.js.gz"
 SEARCH_PAGE = 200
@@ -40,6 +42,15 @@ def window_url(name, lo_ts, hi_ts, offset=0):
     if offset:
         url += "&o=%d" % offset
     return url
+
+
+def thread_url(list_name, mid):
+    """Thread Atom of the thread a message belongs to (any message of it works). `mid` is percent-encoded."""
+    return "%s/%s/%s/t.atom" % (LORE, list_name, mid)
+
+
+def thread_file(name, mid):
+    return "%s.thread-%s.atom" % (name, mid.replace("/", "_")[:150])
 
 
 class _Empty:
@@ -84,6 +95,18 @@ class LiveSource:
         return resp
 
 
+    def thread_atom(self, name, mid):
+        """The whole thread of a message as Atom (one request). An unknown thread (404) is an empty answer."""
+        try:
+            resp = self.fetcher.get(thread_url(name, mid))
+        except FetchError as e:
+            if e.status == 404:
+                return _Empty()
+            raise
+        self._save(thread_file(name, mid), resp.body)
+        return resp
+
+
 class CacheSource:
     """Replays raw responses saved by LiveSource (used for development and tests)."""
 
@@ -110,6 +133,14 @@ class CacheSource:
         return self._R(p.read_bytes())
 
 
+def _cache_thread(self, name, mid):
+    p = self.dir / thread_file(name, mid)
+    return self._R(p.read_bytes()) if p.exists() else _Empty()
+
+
+CacheSource.thread_atom = _cache_thread
+
+
 def manifest_to_json(lists):
     return {n: {"d": i.description, "m": i.modified, "e": i.epochs} for n, i in sorted(lists.items())}
 
@@ -118,18 +149,19 @@ def manifest_from_json(stored):
     return {n: ListInfo(n, v.get("d", ""), v.get("m", 0), v.get("e", [])) for n, v in stored.items()}
 
 
-def ingest(state, name, entries, now, keep_bodies=True, data=None):
-    """Merge parsed feed entries into one list: messages, trimmed bodies and stored diffs.
+def ingest(state, name, entries, now, keep_bodies=True, data=None, retention_days=RETENTION_DAYS):
+    """Merge parsed feed entries into one list: messages with complete bodies, and their parsed diffs.
 
-    Returns (messages added, list data). The caller saves the list data (state.save_list); the diff
-    files are written here, and are cleaned up on the next ingest if the save never happens.
+    Returns (messages added, list data). Diffs wait in the list data until the caller runs
+    retention.finalize_list (which applies the whole series limits and saves), so nothing is written here.
+    `retention_days=None` accepts messages of any age (used when a whole thread is completed).
     """
     if data is None:
         data = state.load_list(name)
     diffs = {}
     records = {e["mid"]: to_record(e, keep_bodies, diffs) for e in entries}
-    added = merge_records(data, records, now)
-    apply_diffs(state, name, data, diffs)
+    added = merge_records(data, records, now, retention_days)
+    stash_diffs(data, diffs)
     return added, data
 
 
@@ -143,14 +175,16 @@ def feed_rate(entries):
 
 
 def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pages=2,
-          keep_bodies=True, log=print, clock=time.monotonic):
+          keep_bodies=True, log=print, clock=time.monotonic, limits=None):
     """Run one crawl pass and return a summary dict.
 
     Stored state is only ever replaced by a merged superset (plus age pruning), so a failed
     or partial pass cannot corrupt or shrink it.
     """
     deadline = clock() + budget_s
-    summary = {"fetched": 0, "skipped": 0, "failed": 0, "deferred": 0, "messages": 0,
+    limits = limits or Limits()
+    migrate(state, now, log)
+    summary = {"touched": [], "fetched": 0, "skipped": 0, "failed": 0, "deferred": 0, "messages": 0,
                "deep_requests": 0, "aborted": False}
     manifest_ok = True
     try:
@@ -208,8 +242,9 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
                 raise FetchError("feed for %s parsed to zero entries (%d bad)" % (name, bad))
             data = state.load_list(name)
             before_seen = data.get("last_seen", 0)
-            added, data = ingest(state, name, entries, now, keep_bodies, data)
-            state.save_list(name, data)
+            added, data = ingest(state, name, entries, now, keep_bodies, data, limits.retention_days)
+            finalize_list(state, name, data, now, limits)
+            summary["touched"].append(name)
             ts = [e["ts"] for e in entries if e["ts"] > 0]
             if ts and (before_seen == 0 or min(ts) > before_seen):
                 deep_candidates.append((max(ts) - min(ts), name, before_seen))
@@ -246,13 +281,13 @@ def crawl(state, source, now, names=None, budget_s=1500, deep_budget=0, deep_pag
             if summary["deep_requests"] >= deep_budget or clock() >= deadline:
                 break
             since = before_seen - 60 if before_seen else now - 6 * 3600
-            _gap_fill(state, source, name, since, now, deep_pages, deep_budget, summary, ml, keep_bodies, log)
+            _gap_fill(state, source, name, since, now, deep_pages, deep_budget, summary, ml, keep_bodies, log, limits)
 
     state.save_meta(meta)
     return summary
 
 
-def _gap_fill(state, source, name, since, now, pages, budget, summary, ml, keep_bodies, log):
+def _gap_fill(state, source, name, since, now, pages, budget, summary, ml, keep_bodies, log, limits):
     """Sweep a busy list for patch related messages posted since `since` (the feed skipped them)."""
     total = 0
     data = None
@@ -268,7 +303,7 @@ def _gap_fill(state, source, name, since, now, pages, budget, summary, ml, keep_
             entries, _, _ = parse_feed(resp.body)
             if not entries:
                 break
-            added, data = ingest(state, name, entries, now, keep_bodies, data)
+            added, data = ingest(state, name, entries, now, keep_bodies, data, limits.retention_days)
             total += added
             changed = True
             if len(entries) < SEARCH_PAGE:
@@ -277,7 +312,9 @@ def _gap_fill(state, source, name, since, now, pages, budget, summary, ml, keep_
     except (FetchError, StateError) as e:
         log("  %-28s gap fill stopped: %s" % (name, e))
     if data is not None and changed:
-        state.save_list(name, data)
+        finalize_list(state, name, data, now, limits)
+        if name not in summary["touched"]:
+            summary["touched"].append(name)
         summary["messages"] += total
         ml[name]["n"] = len(data["msgs"])
     log("  %-28s gap fill +%d" % (name, total))

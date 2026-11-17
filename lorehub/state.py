@@ -8,11 +8,12 @@ import tempfile
 import time
 from pathlib import Path
 
-RETENTION_DAYS = 120
-BODY_DAYS = 60
+RETENTION_DAYS = 180  # at least the backfill horizon; the effective value is max(this, configured horizon)
+BODY_DAYS = 60  # discussion bodies (series members always keep theirs)
 MAX_MSGS = 10000  # newest messages kept per list, keeps the busiest lists bounded
-MAX_BODY_MSGS = 300  # newest messages that keep a body
-MAX_DIFF_MSGS = 300  # newest patch messages per list that keep a diff
+MAX_BODY_MSGS = 300  # newest discussion messages that keep a body
+MAX_DIFF_MSGS = 1000  # newest patch messages per list that keep a diff (whole series, newest first)
+STATE_EPOCH = 3  # bump when records or limits change so that old state is walked again, see migrate.py
 DAY = 86400
 
 
@@ -84,6 +85,8 @@ class State:
         return data
 
     def save_list(self, name, data):
+        """Write the messages of a list (one file per UTC day) and the diffs stashed by ingest."""
+        self.sync_diffs(name, data)
         days = {}
         for mid, rec in data["msgs"].items():
             day = time.strftime("%Y-%m-%d", time.gmtime(rec["t"]))
@@ -99,6 +102,39 @@ class State:
         for path in self.segments(name):
             if path.name not in keep:
                 path.unlink()
+
+    def sync_diffs(self, name, data):
+        """Write the diffs stashed in data["_diffs"] and drop diffs whose message lost its "dz" flag.
+
+        Only the day files in data["_touched"] are rewritten. A record has "dz" exactly when its diff
+        is stored, so a diff that is wanted but not found anywhere loses its flag.
+        """
+        pend = data.pop("_diffs", None) or {}
+        touched = set(data.pop("_touched", None) or ())
+        if not touched:
+            return
+        msgs = data["msgs"]
+        wanted = {}
+        for mid, r in msgs.items():
+            if "dz" in r:
+                day = day_of(r["t"])
+                if day in touched:
+                    wanted.setdefault(day, []).append(mid)
+        existing = set(self.diff_days(name))
+        for day in sorted(touched):
+            mids = wanted.get(day, [])
+            if not mids:
+                self.save_diff_day(name, day, {})
+                continue
+            stored = self.load_diff_day(name, day) if day in existing else {}
+            merged = {}
+            for m in mids:
+                d = pend.get(m) or stored.get(m)
+                if d is not None:
+                    merged[m] = d
+                else:
+                    msgs[m].pop("dz", None)
+            self.save_diff_day(name, day, merged)
 
     # ---- diffs: one gzip JSON file per list and UTC day, state/diffs/<list>/<YYYY-MM-DD>.json.gz
 
@@ -172,85 +208,51 @@ class State:
         self._save_json("numbers.json", numbers)
 
 
-def merge_records(data, records, now, retention_days=RETENTION_DAYS, body_days=BODY_DAYS):
-    """Merge {mid: record} into a list state dict in place and prune. Returns number added."""
+def day_of(ts):
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))
+
+
+DERIVED = ("f", "tr", "ds", "bt")  # recomputed from the full message on every fetch
+
+
+def merge_records(data, records, now, retention_days=RETENTION_DAYS):
+    """Merge {mid: record} into a list state dict in place. Returns the number of new messages.
+
+    A record that is fetched again replaces the stored one (messages are immutable, so only our own
+    parsing changes: this is how trimmed bodies of an older format are replaced by complete ones). The
+    stored body is kept when the new record has none, and "dz" is kept (see sync_diffs).
+    Records older than `retention_days` are not merged; None disables the age check.
+    """
     msgs = data["msgs"]
-    horizon = now - retention_days * DAY
+    horizon = None if retention_days is None else now - retention_days * DAY
     added = 0
     for mid, rec in records.items():
-        if rec["t"] < horizon or rec["t"] <= 0:
+        if rec["t"] <= 0 or (horizon is not None and rec["t"] < horizon):
             continue
         old = msgs.get(mid)
         if old is None:
             msgs[mid] = rec
             added += 1
-        else:
-            for k, v in rec.items():
-                if k not in old or (k == "b" and not old.get("b")):
-                    old[k] = v
-    prune(data, now, retention_days, body_days)
+            continue
+        for k in DERIVED:
+            if k not in rec:
+                old.pop(k, None)
+        old.update(rec)
+        if "b" in rec and "bv" not in rec:
+            old.pop("bv", None)
     return added
 
 
-def prune(data, now, retention_days=RETENTION_DAYS, body_days=BODY_DAYS,
-          max_msgs=MAX_MSGS, max_body_msgs=MAX_BODY_MSGS):
-    msgs = data["msgs"]
-    horizon = now - retention_days * DAY
-    body_horizon = now - body_days * DAY
-    for mid in [m for m, r in msgs.items() if r["t"] < horizon]:
-        del msgs[mid]
-    if len(msgs) > max_msgs:
-        newest = sorted(msgs.items(), key=lambda kv: kv[1]["t"], reverse=True)
-        for mid, _ in newest[max_msgs:]:
-            del msgs[mid]
-    with_body = sorted((r["t"], mid) for mid, r in msgs.items() if "b" in r)
-    keep = {mid for _, mid in with_body[-max_body_msgs:]}
-    for mid, r in msgs.items():
-        if "b" in r and (r["t"] < body_horizon or mid not in keep):
-            del r["b"]
-    ts = [r["t"] for r in msgs.values()]
-    data["last_seen"] = max(ts) if ts else 0
-
-
-def day_of(ts):
-    return time.strftime("%Y-%m-%d", time.gmtime(ts))
-
-
-def apply_diffs(state, name, data, new_diffs, keep=MAX_DIFF_MSGS):
-    """Store new diffs for a list and keep only the newest `keep` patch diffs.
-
-    A record has "dz" (kept diff bytes) exactly when its diff is stored. Records that fall out of the
-    newest `keep` lose "dz" and their diff is removed from the day files, so the data branch stays bounded.
-    Only the day files that actually change are rewritten.
-    """
+def stash_diffs(data, new_diffs):
+    """Remember parsed diffs of new messages until save_list writes them. Sets "dz" on their records."""
     from .diff import kept_bytes  # local import: diff.py has no state dependency
 
-    msgs = data["msgs"]
-    new = {m: d for m, d in new_diffs.items() if m in msgs}
-    cands = sorted(((r["t"], m) for m, r in msgs.items() if "dz" in r or m in new), reverse=True)
-    keep_set = {m for _, m in cands[:keep]}
-    touched = set()
-    for _, mid in cands[keep:]:
-        if msgs[mid].pop("dz", None) is not None or mid in new:
-            touched.add(day_of(msgs[mid]["t"]))
-        new.pop(mid, None)
-    for mid, d in new.items():
-        msgs[mid]["dz"] = kept_bytes(d)
-        touched.add(day_of(msgs[mid]["t"]))
-    wanted = {}
-    for mid in keep_set:
-        wanted.setdefault(day_of(msgs[mid]["t"]), set()).add(mid)
-    for day in set(state.diff_days(name)) | touched:
-        mids = wanted.get(day, set())
-        if not mids:
-            state.save_diff_day(name, day, {})
+    pend = data.setdefault("_diffs", {})
+    touched = data.setdefault("_touched", set())
+    for mid, d in new_diffs.items():
+        rec = data["msgs"].get(mid)
+        if rec is None:
             continue
-        if day not in touched:
-            continue
-        stored = state.load_diff_day(name, day)
-        merged = {m: stored[m] for m in mids if m in stored}
-        merged.update({m: new[m] for m in mids if m in new})
-        for m in mids:
-            if m not in merged:
-                msgs[m].pop("dz", None)  # diff is gone, do not claim it exists
-        state.save_diff_day(name, day, merged)
+        rec["dz"] = kept_bytes(d)
+        pend[mid] = d
+        touched.add(day_of(rec["t"]))

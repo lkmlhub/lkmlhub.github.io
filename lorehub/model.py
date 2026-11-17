@@ -34,6 +34,10 @@ class Msg:
     ds: object = None
     dz: object = None  # kept diff bytes, present when a diff is stored
     dl: str = ""  # a list whose state holds the diff
+    bv: int = 0  # body format: 3 is a complete body, 0 an older trimmed body (or none)
+    bt: bool = False  # the body was cut at the per message size cap
+    tc: int = 0  # time the whole thread was fetched from lore (set on a series' first message)
+    tn: int = 0  # number of such fetches
     lists: set = field(default_factory=set)
     subj: object = None
     top: str = ""
@@ -73,28 +77,34 @@ class Entity:
     pull: bool = False
 
 
+def add_records(msgs, name, recs):
+    """Add the records of one list to the global message map, recording the list on every message."""
+    for mid, r in recs.items():
+        m = msgs.get(mid)
+        if m is None:
+            m = msgs[mid] = Msg(
+                mid=mid, t=r["t"], a=r.get("a", ""), h=r.get("h", ""), p=r.get("p", ""),
+                s=r.get("s", ""), b=r.get("b", ""), f=r.get("f", ""), tr=r.get("tr", []),
+                ds=r.get("ds"), dz=r.get("dz"), bv=r.get("bv", 0), bt=bool(r.get("bt")),
+                tc=r.get("tc", 0), tn=r.get("tn", 0),
+            )
+            m.subj = parse_subject(m.s)
+            if m.dz is not None:
+                m.dl = name
+        else:
+            if (r.get("bv", 0) > m.bv) or (not m.b and r.get("b")):
+                m.b, m.bv, m.bt = r.get("b", ""), r.get("bv", 0), bool(r.get("bt"))
+            if m.dz is None and r.get("dz") is not None:
+                m.dz, m.dl = r["dz"], name
+            m.tc, m.tn = max(m.tc, r.get("tc", 0)), max(m.tn, r.get("tn", 0))
+        m.lists.add(name)
+
+
 def load_messages(state, names):
     """Merge the per-list states into one global map, recording every list a message is in."""
     msgs = {}
     for name in names:
-        data = state.load_list(name)
-        for mid, r in data["msgs"].items():
-            m = msgs.get(mid)
-            if m is None:
-                m = msgs[mid] = Msg(
-                    mid=mid, t=r["t"], a=r.get("a", ""), h=r.get("h", ""), p=r.get("p", ""),
-                    s=r.get("s", ""), b=r.get("b", ""), f=r.get("f", ""), tr=r.get("tr", []),
-                    ds=r.get("ds"), dz=r.get("dz"),
-                )
-                m.subj = parse_subject(m.s)
-                if m.dz is not None:
-                    m.dl = name
-            else:
-                if not m.b and r.get("b"):
-                    m.b = r["b"]
-                if m.dz is None and r.get("dz") is not None:
-                    m.dz, m.dl = r["dz"], name
-            m.lists.add(name)
+        add_records(msgs, name, state.load_list(name)["msgs"])
     return msgs
 
 
@@ -241,6 +251,8 @@ def _ghost(head, root, members):
     e.total = s.total or 0
     e.tags = _chips(s)
     e.rfc, e.resend, e.pull = s.rfc, s.resend, s.kind == "pull"
+    if e.pull:
+        e.kind = "issue"  # a git pull request has no diff: it is shown as a discussion
     e.lists = set().union(*[m.lists for m in members])
     _common(e, members)
     return e
@@ -268,6 +280,8 @@ def _revision(pms, kind):
     e.rfc = any(m.subj.rfc for m in pms)
     e.resend = any(m.subj.resend for m in pms)
     e.pull = kind == "pull"
+    if e.pull:
+        e.kind = "issue"  # a git pull request has no diff: it is shown as a discussion
     e.lists = set().union(*[m.lists for m in pms])
     e.author, e.author_name = first.h, first.a
     e.key = (first.h, norm_title(e.title))
@@ -325,7 +339,7 @@ def link_versions(revs):
 
 def compute_status(e, now):
     """Heuristic label: merged > superseded > changes > reviewed > acked > tested > review > open."""
-    if e.kind == "issue":
+    if e.kind == "issue" and not e.pull:
         e.label = "stale" if now - e.updated > STALE_DAYS * DAY else "open"
         e.state = state_of(e.label)
         return e

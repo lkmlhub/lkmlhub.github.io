@@ -19,24 +19,27 @@ from dataclasses import dataclass
 from .crawl import SEARCH_PAGE, feed_rate, ingest, manifest_from_json
 from .feed import parse_feed
 from .fetch import FetchError
-from .state import RETENTION_DAYS, StateError
+from .migrate import migrate
+from .retention import Limits, effective_retention, finalize_list
+from .state import MAX_DIFF_MSGS, StateError
 
 DAY = 86400
 
 
 @dataclass
 class Config:
-    days: float = 90  # horizon, how far back to fill
+    days: float = 180  # horizon, how far back to fill
     budget_s: float = 720  # wall clock budget of one run
     max_requests: int = 900  # requests per run
-    max_total: int = 4000  # requests over all runs, a hard stop
-    list_pages: int = 25  # pages per list (5000 entries), the busiest lists stop there
+    max_total: int = 12000  # requests over all runs, a hard stop
+    list_pages: int = 60  # pages per list (12 000 entries), a safety cap
+    fill_patches: int = int(MAX_DIFF_MSGS * 1.1)  # a list is full once this many patch diffs are newer than the cursor
     commit_pages: int = 100  # pages between saves
     keep_bodies: bool = True
 
 
 def horizon_ts(now, days):
-    return int(now - min(days, RETENTION_DAYS) * DAY)
+    return int(now - days * DAY)
 
 
 def list_state(meta_list):
@@ -53,11 +56,16 @@ def is_done(bf, hz, list_pages=None):
     return not (bf.get("cap") and list_pages is not None and bf.get("pg", 0) < list_pages)
 
 
+def stop_reason(bf):
+    """Why a finished walk ended: "" (reached the horizon), "fill" (newest patches stored), "cap" (page cap)."""
+    return "cap" if bf.get("cap") else "fill" if bf.get("fill") else ""
+
+
 def history_start(bf, hz):
     """Oldest time the backfill of a list reached, or 0 when it has not run."""
     if not bf:
         return 0
-    if bf.get("done") and not bf.get("cap"):
+    if bf.get("done") and not bf.get("cap") and not bf.get("fill"):
         return bf.get("hz") or bf.get("cur") or 0
     return bf.get("cur") or 0
 
@@ -92,15 +100,17 @@ def next_cursor(bf, entries, hz):
     return cur
 
 
-def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time.monotonic):
+def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time.monotonic, limits=None):
     """Run one budgeted backfill pass. Returns a summary dict. Never shrinks or corrupts stored state."""
     cfg = cfg or Config()
+    limits = limits or Limits(retention_days=effective_retention(cfg.days))
+    migrate(state, now, log)
     deadline = clock() + cfg.budget_s
     hz = horizon_ts(now, cfg.days)
     meta = state.load_meta()
     ml = meta.setdefault("lists", {})
     bfm = meta.setdefault("backfill", {})
-    summary = {"requests": 0, "pages": 0, "messages": 0, "lists_done": 0, "lists_left": 0, "failed": 0,
+    summary = {"touched": [], "requests": 0, "pages": 0, "messages": 0, "lists_done": 0, "lists_left": 0, "failed": 0,
                "aborted": False, "stopped": ""}
     manifest = manifest_from_json(state.load_manifest())
     universe = list(names) if names else sorted(set(manifest) | set(ml))
@@ -129,7 +139,7 @@ def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time
 
     def commit():
         for nm, data in open_lists.items():
-            state.save_list(nm, data)
+            finalize_list(state, nm, data, now, limits)
         open_lists.clear()
         bfm.update(requests=base_total + summary["requests"], last=now, days=cfg.days)
         state.save_meta(meta)
@@ -151,8 +161,10 @@ def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time
         try:
             data = open_lists.get(name)
             if entries:
-                added, data = ingest(state, name, entries, now, cfg.keep_bodies, data)
+                added, data = ingest(state, name, entries, now, cfg.keep_bodies, data, limits.retention_days)
                 open_lists[name] = data
+                if name not in summary["touched"]:
+                    summary["touched"].append(name)
                 summary["messages"] += added
                 m["n"] = len(data["msgs"])
             else:
@@ -171,6 +183,9 @@ def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time
         if len(entries) < SEARCH_PAGE or bf["cur"] <= hz:  # the window is exhausted: complete down to hz
             bf.update(done=True, cur=hz)
             bf.pop("cap", None)
+            bf.pop("fill", None)
+        elif data is not None and sum(1 for r in data["msgs"].values() if "dz" in r and r["t"] >= bf["cur"]) >= cfg.fill_patches:
+            bf.update(done=True, fill=1)  # older series would be dropped by the retention anyway
         elif bf["pg"] >= cfg.list_pages:
             bf.update(done=True, cap=1)
         else:
@@ -179,7 +194,7 @@ def run_backfill(state, source, now, cfg=None, names=None, log=print, clock=time
             summary["lists_done"] += 1
             log("  %-28s backfill done after %d pages (%s%s)" % (
                 name, bf["pg"], time.strftime("%Y-%m-%d", time.gmtime(history_start(bf, hz))),
-                ", page cap" if bf.get("cap") else ""))
+                ", page cap" if bf.get("cap") else ", newest %d patches stored" % limits.max_diff_msgs if bf.get("fill") else ""))
         return not bf.get("done")
 
     pending = {}
