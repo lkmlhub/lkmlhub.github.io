@@ -11,7 +11,7 @@
 
   function loreSearchLink(q) {
     return h('p', { class: 'search-lore' }, LH.extLink('https://lore.kernel.org/all/?q=' + encodeURIComponent(q), ['Search lore.kernel.org for this ', LH.icon('external')], 'btn'),
-      h('span', { class: 'muted small' }, ' The full archive on lore may hold messages that are outside the window LoreHub keeps.'));
+      h('span', { class: 'muted small' }, ' The full archive on lore may hold messages that are outside the window LkmlHub keeps.'));
   }
 
   function listMatches(lists, terms) {
@@ -69,7 +69,7 @@
         status.textContent = ids.length ? LH.plural(ids.length, 'result') + (lm.length ? ' (' + LH.plural(lm.length, 'list') + ' above)' : '') + '.'
           : 'No patch series or discussion matches "' + q + '".';
         if (!ids.length) {
-          results.appendChild(LH.empty('Nothing found', 'Try fewer or shorter words. LoreHub keeps recent history only; the button below searches the whole archive.'));
+          results.appendChild(LH.empty('Nothing found', 'Try fewer or shorter words. LkmlHub keeps recent history only; the button below searches the whole archive.'));
           return;
         }
         results.appendChild(h('h2', { class: 'side-title' }, 'Patch series and discussions'));

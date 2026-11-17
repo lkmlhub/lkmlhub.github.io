@@ -1,4 +1,4 @@
-# LoreHub
+# LkmlHub
 
 A GitHub-style view of every mailing list archived on [lore.kernel.org](https://lore.kernel.org/).
 
@@ -72,7 +72,7 @@ Useful options:
 | complete | `--lists a,b --complete-requests 50` | run only the thread completion queue |
 | crawl, all | `--from-cache DIR`, `--save-raw DIR` | replay or record raw HTTP responses, for offline development |
 | build, all | `--out public` | output directory |
-| build, all | `--base /lorehub/` | base path, used only by `404.html` |
+| build, all | `--base /lkmlhub/` | base path, used only by `404.html` |
 | build, all | `--max-site-mb 700` | site size cap: above it whole series are left out, oldest closed ones first |
 | backfill | `--lists a,b --backfill-days 30` | run only the backfill, for chosen lists |
 
@@ -82,7 +82,7 @@ Useful options:
   public-inbox epoch; the newest `modified` time says when the list last changed.
 * Per list activity comes from `https://lore.kernel.org/<list>/new.atom`. The feed carries, per message,
   author, subject, time, message-id (inside the link), the direct parent (`thr:in-reply-to`) and the
-  complete text. **It holds only the 25 newest messages**, so LoreHub accumulates history across runs and keeps
+  complete text. **It holds only the 25 newest messages**, so LkmlHub accumulates history across runs and keeps
   **180 days** (the retention follows the configured horizon, never less than 180 days).
 * A busy list can produce more than 25 messages between two runs (`lkml` peaks at 25 per 3.5 minutes).
   When a gap is detected the crawler sweeps it with the same host's search Atom, for patch related
@@ -98,7 +98,7 @@ Useful options:
   in over about four runs; the home page shows per list how far its history reaches. Replies keep the tag in their
   subject, so review threads come with the series. Request math and alternatives: [docs/DESIGN.md](docs/DESIGN.md).
 * **Complete conversations (thread completion).** The search walk misses replies whose subject lost the patch tags
-  and messages that fell into a gap. LoreHub therefore detects incomplete series (a reply whose parent is not stored,
+  and messages that fell into a gap. LkmlHub therefore detects incomplete series (a reply whose parent is not stored,
   numbered patches missing such as 3/7 of 1/7, 2/7, 4/7, no cover letter although the patches say N > 1 and one points to
   a missing parent) and fetches the whole thread of each from `https://lore.kernel.org/<list>/<message-id>/t.atom`, one
   request per series, newest and open series first, resumable, with its own budget (300 requests and 8 minutes per run,
@@ -116,7 +116,7 @@ Useful options:
 * **Diffs.** The feed body carries the complete patch (checked on 1 469 real patches, the largest 1 MB), so no extra
   request is made. The diff is parsed into files (renames, new, deleted, binary, mode changes), cut at 120 KB per
   patch, stripped of e-mail addresses and kept on the data branch for the series of the newest 1 000 patch messages of each list.
-* Polite by construction: User-Agent `lorehub-bot/0.1 (+https://github.com/lkmlhub/lkmlhub.github.io)`, at most
+* Polite by construction: User-Agent `lkmlhub-bot/0.1 (+https://github.com/lkmlhub/lkmlhub.github.io)`, at most
   2 concurrent requests, at least 0.5 s between request starts, `Retry-After` honoured, exponential
   backoff on 429/503/5xx, a hard stop if the server asks for a long pause, validators
   (`If-None-Match`, `If-Modified-Since`) sent when known, and lists whose manifest `modified` time did
@@ -187,7 +187,7 @@ Optional repository variables: `LOREHUB_BACKFILL_DAYS` (default 180, 0 = off), `
 `LOREHUB_MAX_SITE_MB` (700), `LOREHUB_MAX_STATE_MB` (650).
 
 **robots.txt:** `https://lore.kernel.org/robots.txt` currently disallows all crawlers (`User-agent: *`,
-`Disallow: /`). LoreHub only fetches the manifest and the Atom feeds, which the service does serve, with
+`Disallow: /`). LkmlHub only fetches the manifest and the Atom feeds, which the service does serve, with
 an identifying User-Agent and a low request rate, but it does not read or obey robots.txt. Check with
 the kernel.org admins that this use is acceptable before publishing, and see the cadence notes in
 docs/DESIGN.md. The backfill makes the load heavier than the first version: about 2 900 search requests
@@ -261,7 +261,7 @@ All mail belongs to its authors and is served by lore.kernel.org, powered by
 [public-inbox](https://public-inbox.org/). Related tools with different jobs:
 [patchwork](https://patchwork.kernel.org/) (patch state for some lists), [b4](https://b4.docs.kernel.org/)
 and [korgalore](https://korg.docs.kernel.org/) (command line tools), and plain archives such as lkml.org
-and spinics. LoreHub is not affiliated with any of them.
+and spinics. LkmlHub is not affiliated with any of them.
 
 ## Licence
 

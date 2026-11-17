@@ -1,6 +1,6 @@
-# LoreHub design
+# LkmlHub design
 
-LoreHub turns the lore.kernel.org mailing list archives into a GitHub-style
+LkmlHub turns the lore.kernel.org mailing list archives into a GitHub-style
 static site. A mailing list is a repository, a patch series is a pull request,
 a non-patch thread is a discussion, reviews and acks are review states, and
 "Applied, thanks" replies or `[GIT PULL]` replies are merges.
@@ -14,7 +14,7 @@ These were measured against the live service, not assumed.
   peak, so a 30 minute cadence cannot see everything through `new.atom` alone.
 * The same host serves search results as Atom: `/<list>/?q=<query>&x=A`
   returns up to **200** entries per page (about 1.2 MB), newest first, `o=<offset>` pages through them.
-  LoreHub uses it for the history backfill and for a small per-run sweep of busy lists (see Backfill).
+  LkmlHub uses it for the history backfill and for a small per-run sweep of busy lists (see Backfill).
 * Neither `new.atom` nor the manifest sends `ETag` or `Last-Modified`, so
   conditional requests cannot save anything today. The code still sends and
   persists validators in case that changes.
@@ -34,7 +34,7 @@ These were measured against the live service, not assumed.
   not add up, both are mail client damage (a hard wrapped `@@` line), not feed truncation. So there is no
   reason for extra per-message requests: the optional capped fetch of `/<list>/<message-id>/raw` that the
   design allowed is **not implemented** (it would be 0 requests by default and would never trigger). The
-  Files changed banner "truncated" therefore only ever means LoreHub's own size caps.
+  Files changed banner "truncated" therefore only ever means LkmlHub's own size caps.
 * **Search query syntax** (verified live on linux-security-module): `s:` matches subject words, `dt:` needs the
   14 digit form `YYYYMMDDHHMMSS` (the 8 digit form answers 404), the range is exclusive at the lower and
   inclusive at the upper end (a message at time T is found by `dt:<T-1>..<T>` and not by `dt:<T>..<T+1>`),
@@ -455,7 +455,7 @@ configurable value is `--base`, used only by `404.html`.
 ## Politeness and robots.txt
 
 `https://lore.kernel.org/robots.txt` disallows every crawler (`User-agent: *`, `Disallow: /`). The task
-fixed the data source to the manifest and the Atom feeds, so LoreHub fetches only those, with an
+fixed the data source to the manifest and the Atom feeds, so LkmlHub fetches only those, with an
 identifying User-Agent, at most 2 concurrent requests, 0.5 s between request starts, Retry-After
 honoured and unchanged lists skipped. It does not read robots.txt. This needs an explicit decision from
 the owner (ask the kernel.org admins, or lower the cadence). Rough load of the scheduled workflow with the

@@ -308,10 +308,10 @@ class XssBuildTests(unittest.TestCase):
                      "--dump-dom", url],
                     capture_output=True, text=True, timeout=180)
                 dom = res.stdout
-                self.assertIn("LoreHub", dom, route)
+                self.assertIn("LkmlHub", dom, route)
                 self.assertNotIn("<title>PWNED", dom, route)
                 if not route.startswith("search?q=PWNED"):  # there the page title legitimately echoes the query
-                    self.assertNotIn("PWNED - LoreHub", dom, route)
+                    self.assertNotIn("PWNED - LkmlHub", dom, route)
                 self.assertNotIn('<img src="x"', dom, route)
                 self.assertNotIn("<svg onload", dom, route)
                 self.assertNotIn('<script>document.title', dom, route)

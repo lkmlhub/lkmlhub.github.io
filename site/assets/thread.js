@@ -25,13 +25,13 @@
     var m = ctx.order[i], text = ctx.bodies ? ctx.bodies[i] : undefined;
     var link = LH.extLink(LH.loreUrl(m.ml || ctx.d.home, m.mid), 'View on lore');
     if (text === undefined) return h('p', { class: 'muted pad-sm' }, 'The text of this message could not be loaded. ', link, '.');
-    if (text === null) return h('p', { class: 'muted pad-sm' }, 'The text of this message is not kept by LoreHub (an older version of the series, or outside the history window). ', link, '.');
+    if (text === null) return h('p', { class: 'muted pad-sm' }, 'The text of this message is not kept by LkmlHub (an older version of the series, or outside the history window). ', link, '.');
     var out = h('div', { class: 'mail-wrap' }, LH.renderBody(text));
     if (m.lb) {
       out.appendChild(h('p', { class: 'muted small pad-sm note-lb' }, 'This is a shortened copy, the complete text is being fetched again. ', link, '.'));
     }
     if (m.bt) {
-      out.appendChild(h('p', { class: 'muted small pad-sm note-bt' }, 'The message is longer than the 128 KB LoreHub keeps, the rest is cut. ', link, '.'));
+      out.appendChild(h('p', { class: 'muted small pad-sm note-bt' }, 'The message is longer than the 128 KB LkmlHub keeps, the rest is cut. ', link, '.'));
     }
     return out;
   }
@@ -228,7 +228,7 @@
     var link = LH.extLink(d.lore, 'Open the full thread on lore');
     if (d.cp === 1) {
       return h('p', { class: 'muted small coverage-note', 'data-coverage': 'waiting' },
-        'Conversation still being completed: LoreHub fetches the whole thread from lore in the background, so some replies may be missing for now. ', link, '.');
+        'Conversation still being completed: LkmlHub fetches the whole thread from lore in the background, so some replies may be missing for now. ', link, '.');
     }
     return h('p', { class: 'muted small coverage-note', 'data-coverage': 'gaps' },
       'Some messages of this thread could not be found on lore, the conversation may have gaps. ', link, '.');
@@ -247,7 +247,7 @@
       var sub = repliesBox(ctx, tree, 0, 0);
       if (sub) box.appendChild(sub);
     } else if (d.pa) {
-      box.appendChild(h('div', { class: 'banner' }, 'The first message of this thread is not in LoreHub, so only the messages that were found are shown. ',
+      box.appendChild(h('div', { class: 'banner' }, 'The first message of this thread is not in LkmlHub, so only the messages that were found are shown. ',
         LH.extLink(d.lore, 'Open the thread on lore'), '.'));
     }
     var base = d.cover ? 1 : 0;
@@ -258,7 +258,7 @@
       if (sub) box.appendChild(sub);
     });
     if (tree.orphans.length) {
-      box.appendChild(h('div', { class: 'banner small' }, 'Replies whose parent message is not in LoreHub (yet). ', LH.extLink(d.lore, 'Open the thread on lore'), '.'));
+      box.appendChild(h('div', { class: 'banner small' }, 'Replies whose parent message is not in LkmlHub (yet). ', LH.extLink(d.lore, 'Open the thread on lore'), '.'));
       var flat = h('div', { class: 'replies flat' });
       tree.orphans.forEach(function (i) { flat.appendChild(card(ctx, i, 'replied')); });
       box.appendChild(flat);
@@ -309,7 +309,7 @@
       if (d.sb) {
         banners.push(h('div', { class: 'banner' }, 'Superseded by ', h('a', { href: LH.threadHref(d.sb.home, 'pr', d.sb.n) }, 'v' + d.sb.v), ', a newer version of this series.'));
       } else if (d.sbh) {
-        banners.push(h('div', { class: 'banner' }, 'Superseded by v' + d.sbh + ', a newer version of this series that LoreHub does not show (no diff stored). ',
+        banners.push(h('div', { class: 'banner' }, 'Superseded by v' + d.sbh + ', a newer version of this series that LkmlHub does not show (no diff stored). ',
           LH.extLink(d.lore, 'Open the thread on lore'), '.'));
       }
       if (d.pa && d.cover) {

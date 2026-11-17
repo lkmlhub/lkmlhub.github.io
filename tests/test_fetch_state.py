@@ -49,7 +49,7 @@ class FetcherTests(unittest.TestCase):
         r = f.get("https://lore.kernel.org/lkml/new.atom", etag='"abc"', last_modified="Mon, 01 Jan 2026 00:00:00 GMT")
         self.assertEqual(r.status, 304)
         h = calls[0][2]
-        self.assertIn("lorehub-bot", h["User-Agent"])
+        self.assertIn("lkmlhub-bot", h["User-Agent"])
         self.assertEqual(h["If-None-Match"], '"abc"')
         self.assertIn("If-Modified-Since", h)
 

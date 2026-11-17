@@ -114,7 +114,7 @@
     if (f.cb) return h('p', { class: 'diff-note muted' }, 'Combined (merge) diffs are not shown.');
     if (f.b && !f.x) return h('p', { class: 'diff-note muted' }, 'Binary file not shown.');
     if (!f.x) {
-      var why = f.t ? 'The diff text of this file is not kept because the patch is larger than LoreHub stores.' :
+      var why = f.t ? 'The diff text of this file is not kept because the patch is larger than LkmlHub stores.' :
         f.k === 'r' ? 'File renamed without changes.' : f.k === 'c' ? 'File copied without changes.' :
         f.m ? 'File mode changed from ' + f.m[0] + ' to ' + f.m[1] + '.' : 'No textual changes.';
       return h('p', { class: 'diff-note muted' }, why);
@@ -137,7 +137,7 @@
     });
     var table = h('table', { class: 'diff-table', 'aria-label': 'Unified diff of ' + part.f.p }, tbody);
     var out = h('div', { class: 'diff-scroll', tabindex: '0', role: 'region', 'aria-label': 'Diff of ' + part.f.p }, table);
-    if (f.t) out.appendChild(h('p', { class: 'diff-note muted' }, 'The rest of this file is not shown, the patch was cut at LoreHub\'s size limit.'));
+    if (f.t) out.appendChild(h('p', { class: 'diff-note muted' }, 'The rest of this file is not shown, the patch was cut at LkmlHub\'s size limit.'));
     return out;
   }
 
@@ -340,7 +340,7 @@
           if (only !== null) banners.appendChild(h('div', { class: 'banner' }, 'Patch ' + p.i + '/' + total + ' has no stored diff (not kept, or its message was not seen). ', ctx.loreLink(p, 'View full patch on lore'), '.'));
         } else if (pd.tr) {
           banners.appendChild(h('div', { class: 'banner banner-warn' }, 'The diff of patch ' + p.i + '/' + total + ' was truncated: it is ' + kb(pd.sz) +
-            ' and LoreHub keeps at most 120 KB per patch and 600 KB per series. ', ctx.loreLink(p, 'View full patch on lore'), '.'));
+            ' and LkmlHub keeps at most 120 KB per patch and 600 KB per series. ', ctx.loreLink(p, 'View full patch on lore'), '.'));
         }
       });
     }

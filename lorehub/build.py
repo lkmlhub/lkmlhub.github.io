@@ -646,8 +646,8 @@ def _write_shell(tmp, site, lists_json, base, now):
         for l in top
     )
     noscript = (
-        '<noscript><div class="container"><h1>LoreHub</h1>'
-        "<p>LoreHub needs JavaScript to render the pull-request style view. Without it, these are the "
+        '<noscript><div class="container"><h1>LkmlHub</h1>'
+        "<p>LkmlHub needs JavaScript to render the pull-request style view. Without it, these are the "
         "mailing lists it covers, linking to their canonical archive on lore.kernel.org.</p><ul>\n"
         + rows + "\n</ul></div></noscript>"
     )
@@ -656,9 +656,9 @@ def _write_shell(tmp, site, lists_json, base, now):
     (tmp / "index.html").write_text(index, "utf-8")
     base_js = json.dumps(base if base.startswith("/") else "/" + base).replace("</", "<\\/")
     page = (
-        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>LoreHub</title>'
+        '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>LkmlHub</title>'
         '<meta name="robots" content="noindex"></head><body>'
-        '<p>Redirecting to <a href="./">LoreHub</a>...</p><script>'
+        '<p>Redirecting to <a href="./">LkmlHub</a>...</p><script>'
         "(function(){var b=%s;if(b.slice(-1)!=='/')b+='/';var p=location.pathname;"
         "var rest=p.indexOf(b)===0?p.slice(b.length):p.replace(/^\\//,'');"
         "rest=rest.replace(/index\\.html$/,'').replace(/\\/$/,'');"

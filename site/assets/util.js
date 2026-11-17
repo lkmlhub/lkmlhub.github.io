@@ -1,4 +1,4 @@
-/* LoreHub shared helpers. Every node is built with createElement/textContent: mail text is never parsed as HTML. */
+/* LkmlHub shared helpers. Every node is built with createElement/textContent: mail text is never parsed as HTML. */
 (function () {
   'use strict';
   var LH = window.LH = window.LH || {};
@@ -101,7 +101,7 @@
     if (hc === 2) return { text: 'history back to ' + LH.shortDate(hs) + ' (capped)', title: 'A busy list: the backfill stopped at its page cap, older mail is on lore' };
     if (hc === 3) return { text: 'newest series back to ' + LH.shortDate(hs), title: 'A busy list: the newest 1000 patches are stored, older series are on lore' };
     if (hc === 0) return { text: 'history back to ' + LH.shortDate(hs) + ', filling in', title: 'The backfill is still walking back in time over the next runs' };
-    return { text: 'history since ' + LH.shortDate(hs), title: 'The oldest message LoreHub holds for this list' };
+    return { text: 'history since ' + LH.shortDate(hs), title: 'The oldest message LkmlHub holds for this list' };
   };
   LH.timeEl = function (ts) {
     return LH.h('time', { datetime: new Date(ts * 1000).toISOString(), title: LH.fullDate(ts) }, LH.timeAgo(ts));
@@ -266,5 +266,5 @@
 
   LH.color = function (c) { return /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#8b949e'; };
 
-  LH.setTitle = function (t) { document.title = t ? t + ' - LoreHub' : 'LoreHub'; };
+  LH.setTitle = function (t) { document.title = t ? t + ' - LkmlHub' : 'LkmlHub'; };
 })();

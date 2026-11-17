@@ -65,22 +65,22 @@
         table.appendChild(h('tr', null, h('th', { scope: 'row' }, LH.pill(r[0])), h('td', null, r[1])));
       });
       LH.clear(app).appendChild(h('div', { class: 'about' },
-        h('h1', null, 'About LoreHub'),
+        h('h1', null, 'About LkmlHub'),
         section('What this is',
-          h('p', null, 'LoreHub gives every mailing list on lore.kernel.org a GitHub-style view. A list is a repository, a patch series is a pull request, a non-patch thread is a discussion, replies with review trailers are reviews, and "Applied, thanks" replies or [GIT PULL] threads are merges.'),
+          h('p', null, 'LkmlHub gives every mailing list on lore.kernel.org a GitHub-style view. A list is a repository, a patch series is a pull request, a non-patch thread is a discussion, replies with review trailers are reviews, and "Applied, thanks" replies or [GIT PULL] threads are merges.'),
           h('p', null, 'Right now it knows ' + t.lists + ' lists, ' + t.messages + ' messages and ' + t.threads + ' threads' +
             (t.pending ? ' (' + t.pending + ' lists are still waiting for their first crawl)' : '') + '.')),
         section('Data source',
-          h('p', null, 'Only lore.kernel.org. The list of lists is manifest.js.gz. Fresh mail comes from each list\'s new.atom feed, which holds just the 25 newest messages, so LoreHub accumulates history across runs and keeps ' + data.window_days + ' days. The feed carries the complete text of every message and the complete diff of every patch, so nothing is trimmed: quoted text, trailers and signatures are kept, a message is only cut above 128 KB (and then says so and links to lore). Public-inbox git repositories are never cloned.'),
+          h('p', null, 'Only lore.kernel.org. The list of lists is manifest.js.gz. Fresh mail comes from each list\'s new.atom feed, which holds just the 25 newest messages, so LkmlHub accumulates history across runs and keeps ' + data.window_days + ' days. The feed carries the complete text of every message and the complete diff of every patch, so nothing is trimmed: quoted text, trailers and signatures are kept, a message is only cut above 128 KB (and then says so and links to lore). Public-inbox git repositories are never cloned.'),
           h('p', null, 'Requests are polite: at most 2 at a time, at least half a second apart, Retry-After honoured, a descriptive User-Agent, and lists whose archive has not changed are skipped.')),
         section('History horizon: ' + (bf && bf.days ? bf.days : 180) + ' days',
-          h('p', null, bf && bf.days ? 'Besides the newest messages, LoreHub walks every list back in time through the search Atom of that list, down to a horizon of ' + bf.days + ' days (' + LH.shortDate(bf.horizon) + '). ' +
+          h('p', null, bf && bf.days ? 'Besides the newest messages, LkmlHub walks every list back in time through the search Atom of that list, down to a horizon of ' + bf.days + ' days (' + LH.shortDate(bf.horizon) + '). ' +
             bf.done + ' of ' + bf.lists + ' lists are complete' + (bf.done < bf.lists ? ', the rest fill in over the next runs' : '') + '.' :
             'The backfill has not started on this site yet.'),
           h('p', null, 'Only patch series with a stored diff are shown. A pull request here is a patch series, and its "Files changed" tab always has the real diff, so a series whose diff is not stored is not listed at all (not in the counts, the activity feed, the contributor pages or the search). For every list the newest series are kept whole, up to 1000 patch messages per list, and when the whole site would be too big the oldest closed series are left out as a whole. Git pull requests have no diff, so they are listed as discussions. Older mail is one click away on lore.kernel.org: every search page links to the same query there.'),
           h('p', null, 'Not covered: threads without a PATCH, RFC, PULL, RESEND or ANNOUNCE tag in the subject (the walk finds them by those tags), mail older than the horizon, and the part of a very busy list beyond its newest 1000 patches, which is why lkml and netdev reach back less far than small lists. Small lists are filled first, each list card on the home page says how far its history reaches.')),
         section('Complete conversations',
-          h('p', null, 'The conversation of a series is the whole thread: cover letter, every patch and every reply, with the complete text, who replied to whom, and the replies to a patch shown under that patch. The search based walk finds replies whose subject still carries the patch tags, so LoreHub also looks for series that look incomplete (a reply whose parent is missing, a missing patch such as 3/7, a missing cover letter) and fetches the whole thread of each of them from the thread feed of lore (/<list>/<message-id>/t.atom), one request per series, newest and open series first, within a request budget per run.'),
+          h('p', null, 'The conversation of a series is the whole thread: cover letter, every patch and every reply, with the complete text, who replied to whom, and the replies to a patch shown under that patch. The search based walk finds replies whose subject still carries the patch tags, so LkmlHub also looks for series that look incomplete (a reply whose parent is missing, a missing patch such as 3/7, a missing cover letter) and fetches the whole thread of each of them from the thread feed of lore (/<list>/<message-id>/t.atom), one request per series, newest and open series first, within a request budget per run.'),
           h('p', null, 'A small note "Conversation still being completed" on a series means it is waiting for that fetch, so a few replies may be missing for now. "Some messages could not be found on lore" means the thread was fetched and lore itself has no more. Replies that arrive later come through the normal feeds. ' +
             (bf && bf.waiting ? bf.waiting + ' series are waiting right now.' : ''))),
         section('Freshness',
@@ -100,7 +100,7 @@
             ', served by ', LH.extLink('https://public-inbox.org/', 'public-inbox'), '. Related tools that do other jobs: ',
             LH.extLink('https://patchwork.kernel.org/', 'patchwork'), ' (patch state tracking for some lists), ',
             LH.extLink('https://b4.docs.kernel.org/', 'b4'), ' and ', LH.extLink('https://korg.docs.kernel.org/', 'korgalore'),
-            ' (command line tools), and plain archives such as lkml.org and spinics. LoreHub is not affiliated with any of them.')),
+            ' (command line tools), and plain archives such as lkml.org and spinics. LkmlHub is not affiliated with any of them.')),
         section('Licence', h('p', null, 'MIT. Source code: ', LH.extLink('https://github.com/lkmlhub/lkmlhub.github.io', 'github.com/lkmlhub/lkmlhub.github.io'), '.'))));
     }).catch(function (e) { LH.clear(app).appendChild(LH.errorBox(e, 'the about page')); });
   };

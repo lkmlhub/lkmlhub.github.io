@@ -1,4 +1,4 @@
-/* LoreHub styles. Colour tokens follow GitHub's light and dark palettes; pairs are checked by tests/test_frontend.py. */
+/* LkmlHub styles. Colour tokens follow GitHub's light and dark palettes; pairs are checked by tests/test_frontend.py. */
 :root {
   --bg: #ffffff;
   --bg-subtle: #f6f8fa;

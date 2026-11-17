@@ -102,7 +102,7 @@ jobs:
             --complete-requests "$COMPLETE" \
             --max-state-mb "$MAX_STATE_MB" --max-site-mb "$MAX_SITE_MB" | tee crawl.log
           {
-            echo "### LoreHub update"
+            echo "### LkmlHub update"
             echo '```'
             tail -n 8 crawl.log
             echo '```'
@@ -117,8 +117,8 @@ jobs:
       - name: Push the data branch
         working-directory: data-branch
         run: |
-          git config user.name "lorehub-bot"
-          git config user.email "lorehub-bot@users.noreply.github.com"
+          git config user.name "lkmlhub-bot"
+          git config user.email "lkmlhub-bot@users.noreply.github.com"
           TODAY="$(date -u +%Y-%m-%d)"
           LAST="$(cat state/.squashed 2>/dev/null || true)"
           MSG="Update data $(date -u +%Y-%m-%dT%H:%MZ)"
