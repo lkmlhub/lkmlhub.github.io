@@ -271,12 +271,24 @@ class QueueTests(unittest.TestCase):
         s = self.run_q(ThreadSource({"a-0": a}, fail={"a-0"}, backoff=True), touched={"l"})
         self.assertEqual(s["stopped"], "server asked to back off")
 
-    def test_unknown_thread_404_is_final(self):
+    def test_a_thread_lore_does_not_know_is_final_and_a_hard_error_is_retried(self):
+        from lorehub.crawl import _Empty
         a = series("a", 3, have={1, 3})
         self.put(a)
-        s = self.run_q(ThreadSource({}))  # lore answers 404 for the thread
-        self.assertEqual(s["failed"], 1)
-        self.assertEqual(s["left"], 1)
+
+        class NotFound:  # what LiveSource turns an HTTP 404 into: an empty answer
+            calls = 0
+
+            def thread_atom(self, name, mid):
+                NotFound.calls += 1
+                return _Empty()
+
+        s = self.run_q(NotFound())
+        self.assertEqual((s["fetched"], s["failed"], s["left"]), (1, 0, 0))
+        s = self.run_q(NotFound(), touched={"l"})
+        self.assertEqual((s["requests"], NotFound.calls), (0, 1))  # not asked again
+        s = self.run_q(ThreadSource({}), touched={"l"})  # (a transport that raises is a failure and stays queued instead)
+        self.assertEqual(s["requests"], 0)
 
     def test_at_most_two_requests_in_flight(self):
         parts = [series("s%d" % i, 3, have={1, 3}, t=NOW - 3600 * (i + 1), name="D%d" % i, title="t%d: x" % i) for i in range(8)]
